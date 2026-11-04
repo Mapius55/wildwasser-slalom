@@ -1578,7 +1578,7 @@ window.WW_TR = {"en":{"Die künstliche Strecke in Pau am Fuss der Pyrenäen war 
 'use strict';
 const $ = id => document.getElementById(id);
 // shown in the menu and sent to the others: the same number on every phone means the same game
-const GAME_VERSION = 34, GAME_DATE = '04.11.2026';
+const GAME_VERSION = 35, GAME_DATE = '04.11.2026';
 const clamp = (v, a, b) => Math.max(a, Math.min(b, v));
 const REDUCED = matchMedia('(prefers-reduced-motion: reduce)').matches;
 
@@ -5437,19 +5437,19 @@ const kxPassLeft = g => (g.kxSide > 0) !== g.up;
 const kxBandCache = new Map();
 function chevTex(frontRight) {
   const key = 'c' + frontRight; if (kxBandCache.has(key)) return kxBandCache.get(key);
-  const t = canvasTex(512, 128, (g, W, H) => {
+  const t = canvasTex(256, 128, (g, W, H) => {
     g.fillStyle = '#f4f4f0'; g.fillRect(0, 0, W, H);
-    g.strokeStyle = '#141618'; g.lineWidth = 17; g.lineJoin = 'miter'; g.lineCap = 'butt';
+    g.strokeStyle = '#141618'; g.lineWidth = 11; g.lineJoin = 'miter'; g.lineCap = 'butt';
     for (const [c, right] of [[W * 0.25, frontRight], [W * 0.75, !frontRight]]) for (const k of [-1, 1]) {
-      const x = c + k * 24, d = right ? 1 : -1;   // two chevrons side by side, pointing to the side to pass
-      g.beginPath(); g.moveTo(x - d * 16, H * 0.16); g.lineTo(x + d * 16, H * 0.5); g.lineTo(x - d * 16, H * 0.84); g.stroke();
+      const x = c + k * 13, d = right ? 1 : -1;   // two chevrons side by side, pointing to the side to pass
+      g.beginPath(); g.moveTo(x - d * 8, H * 0.14); g.lineTo(x + d * 8, H * 0.5); g.lineTo(x - d * 8, H * 0.86); g.stroke();
     }
   });
   t.__keep = true; kxBandCache.set(key, t); return t;   // kept across rivers
 }
 function kxNumTex(n) {
   const key = 'n' + n; if (kxBandCache.has(key)) return kxBandCache.get(key);
-  const t = canvasTex(512, 64, (g, W, H) => {
+  const t = canvasTex(256, 64, (g, W, H) => {
     g.fillStyle = '#f4f4f0'; g.fillRect(0, 0, W, H);
     g.fillStyle = '#141618'; g.font = `800 ${Math.round(H * 0.84)}px "Barlow Condensed", "Arial Narrow", sans-serif`; g.textAlign = 'center'; g.textBaseline = 'middle';
     for (const c of [0, 0.25, 0.5, 0.75, 1]) g.fillText(n, W * c, H / 2 + 2);
@@ -5457,11 +5457,15 @@ function kxNumTex(n) {
   t.__keep = true; kxBandCache.set(key, t); return t;
 }
 // Kayak Cross buoys in the ICF colours: green RAL 6037, red RAL 3024
-const buoyGeo = shared(new THREE.CylinderGeometry(0.21, 0.21, 1.2, 18)), buoyBandGeo = shared(new THREE.CylinderGeometry(0.215, 0.215, 0.14, 18));
 const buoyMat = shared(new THREE.MeshPhongMaterial({ color: 0x008b29, shininess: 40, specular: 0x333333 })), buoyMatUp = shared(new THREE.MeshPhongMaterial({ color: 0xff0000, shininess: 40, specular: 0x333333 }));
-const buoyBandMat = shared(new THREE.MeshLambertMaterial({ color: 0xf2f2ee }));
-const kxBand = h => shared(new THREE.CylinderGeometry(0.216, 0.216, h, 24, 1, true, -Math.PI / 2));
-const buoyNumGeo = kxBand(0.17), buoyChevGeo = kxBand(0.28), buoyFootGeo = kxBand(0.14), buoyFootMat = shared(new THREE.MeshLambertMaterial({ color: 0x2457b5 }));
+// Kayak Cross gates as at the races: a padded pole two metres long hangs under a square platform, and the platform
+// hangs from the cable on a bridle. The gate swings about the platform, stiffly; the pole reaches down to the water
+const KX_TOP = 2.15, KX_LEN = 2.05, KX_R = 0.11;
+const kxPoleGeo = shared(new THREE.CylinderGeometry(KX_R, KX_R, KX_LEN, 18)), kxPlatGeo = shared(new THREE.BoxGeometry(0.86, 0.07, 0.86));
+const kxPlatTop = shared(new THREE.MeshLambertMaterial({ color: 0xf2f2ee })), kxPlatUnder = shared(new THREE.MeshLambertMaterial({ color: 0xc9cbc8 }));
+const kxPlatRim = [shared(new THREE.MeshLambertMaterial({ color: 0x008b29 })), shared(new THREE.MeshLambertMaterial({ color: 0xff2a10 }))];
+const kxBand = h => shared(new THREE.CylinderGeometry(KX_R + 0.006, KX_R + 0.006, h, 24, 1, true, -Math.PI / 2));
+const buoyNumGeo = kxBand(0.2), buoyChevGeo = kxBand(0.32), buoyFootGeo = kxBand(0.14), buoyFootMat = shared(new THREE.MeshLambertMaterial({ color: 0x2457b5 }));
 const anchorGeo = shared(new THREE.CylinderGeometry(0.06, 0.08, 1, 8).translate(0, 0.5, 0));
 const anchorMat = shared(new THREE.MeshLambertMaterial({ color: 0x6d757a }));
 shared(darkLine);
@@ -5475,16 +5479,18 @@ function buildGates() {
     const cable = new THREE.Mesh(new THREE.CylinderGeometry(0.014, 0.014, len, 4), cableMat);
     cable.rotation.z = Math.PI / 2; cable.position.set(-gt.lat, CABLE_Y, 0); grp.add(cable);
     if (gt.kxSide) {
-      // padded buoy on a rope, its bottom just above the water
-      const piv = new THREE.Group(); piv.position.set(gt.kxSide * gt.half, CABLE_Y, 0); grp.add(piv);
-      const buoy = new THREE.Mesh(buoyGeo, gt.up ? buoyMatUp : buoyMat); buoy.position.y = -(CABLE_Y - 0.78); piv.add(buoy);
+      // the pole under its platform; the gate swings about the platform (see swingPoles)
+      const piv = new THREE.Group(); piv.position.set(gt.kxSide * gt.half, KX_TOP, 0); grp.add(piv);
+      const pole = new THREE.Mesh(kxPoleGeo, gt.up ? buoyMatUp : buoyMat); pole.position.y = -KX_LEN / 2; piv.add(pole);
+      const rim = kxPlatRim[gt.up ? 1 : 0], plat = new THREE.Mesh(kxPlatGeo, [rim, rim, kxPlatTop, kxPlatUnder, rim, rim]); plat.position.y = 0.035; piv.add(plat);
       // the number on a white band at the top, two black chevrons on a white band pointing to the side to pass, a blue foot
       const passX = -gt.kxSide;   // the open side, along the group's x
-      const nb = new THREE.Mesh(buoyNumGeo, new THREE.MeshLambertMaterial({ map: kxNumTex(String(gt.i + 1)) })); nb.position.y = -(CABLE_Y - 1.2); piv.add(nb);
-      const cb = new THREE.Mesh(buoyChevGeo, new THREE.MeshLambertMaterial({ map: chevTex(passX > 0) })); cb.position.y = -(CABLE_Y - 0.84); piv.add(cb);
-      const fb = new THREE.Mesh(buoyFootGeo, buoyFootMat); fb.position.y = -(CABLE_Y - 0.31); piv.add(fb);
-      const lg = new THREE.BufferGeometry().setFromPoints([new THREE.Vector3(0, 0, 0), new THREE.Vector3(0, -(CABLE_Y - 1.36), 0)]);
-      piv.add(new THREE.Line(lg, darkLine));
+      const nb = new THREE.Mesh(buoyNumGeo, new THREE.MeshLambertMaterial({ map: kxNumTex(String(gt.i + 1)) })); nb.position.y = -0.5; piv.add(nb);
+      const cb = new THREE.Mesh(buoyChevGeo, new THREE.MeshLambertMaterial({ map: chevTex(passX > 0) })); cb.position.y = -0.9; piv.add(cb);
+      const fb = new THREE.Mesh(buoyFootGeo, buoyFootMat); fb.position.y = -KX_LEN + 0.12; piv.add(fb);
+      // the bridle from the platform's corners up to one point, and from there a rope to the cable
+      for (const [x, z] of [[-0.4, -0.4], [0.4, -0.4], [0.4, 0.4], [-0.4, 0.4]]) piv.add(new THREE.Line(new THREE.BufferGeometry().setFromPoints([new THREE.Vector3(x, 0.07, z), new THREE.Vector3(0, 0.75, 0)]), darkLine));
+      grp.add(new THREE.Line(new THREE.BufferGeometry().setFromPoints([new THREE.Vector3(gt.kxSide * gt.half, KX_TOP + 0.75, 0), new THREE.Vector3(gt.kxSide * gt.half, CABLE_Y, 0)]), darkLine));
       gt.poles[0].obj = piv;
     } else gt.poles.forEach((p, k) => {
       const piv = new THREE.Group(); piv.position.set((k ? 1 : -1) * gt.half, CABLE_Y, 0); grp.add(piv);
@@ -6358,7 +6364,7 @@ function updateThrow(dt) {
       const dc = tm > 0 ? Math.hypot(rx + B.vx * tm, rz + B.vz * tm) : 99;
       tc = tm - 1.5 / Math.sqrt(Math.max(v2, 0.5));   // the bow gets there first
       if (tm > 0 && tc > -0.15 && tc < 1.3 && dc < 0.85) {
-        _tv.set(bx, level(n.s) + CABLE_Y - BUOY_HANG, bz).project(camera);
+        _tv.set(bx, level(n.s) + KX_TOP - BUOY_HANG, bz).project(camera);
         if (_tv.z < 1) {
           g = n;
           ring.style.transform = `translate(${((_tv.x + 1) / 2 * innerWidth).toFixed(1)}px, ${((1 - _tv.y) / 2 * innerHeight).toFixed(1)}px)`;
@@ -6380,7 +6386,7 @@ function throwBuoy() {
   const p = g.poles[0];
   if (throwGame.t < 0.4) {
     p.thrownT = clamp(5.5 / Math.max(0.5, Math.hypot(B.vx, B.vz)), 1.4, 3); p.botched = false;   // until the stern is past too
-    p.wx += 3.4 * Math.sign(B.vx * g.fx + B.vz * g.fz || 1); p.wz += -g.kxSide * 1.6;   // up and over, out to its closed side
+    p.wx += 2.0 * Math.sign(B.vx * g.fx + B.vz * g.fz || 1); p.wz += -g.kxSide * 1.0;   // pushed aside, out to its closed side: it is heavy and stiff
     toast(tr('Weggeworfen!'), 'ok'); tone(700, 0.08, 'triangle', 0.14); tone(980, 0.12, 'triangle', 0.14, 0.07); splashSnd(0.15);
   } else { p.botched = true; toast(tr('Zu früh!'), 'miss'); tone(200, 0.2, 'square', 0.1); }
   throwGame.g = null; $('throwRing').hidden = true;
@@ -6823,14 +6829,14 @@ function raceLogic(px, pz) {
         // the pole hangs a hand's width above the water: the low bow and stern slip under it, the cockpit and the paddler touch it.
         // A buoy hangs lower and is fat, so it is easy to bump, which is allowed.
         const [ex, ez] = poleEnd(g, p), [d, t] = segDist(ex, ez, P[0][0], P[0][1], P[2][0], P[2][1]), u = 2 * t - 1;
-        const rad = g.kxSide ? 0.21 + 0.26 * (1 - 0.6 * u * u) : Math.abs(u) > 0.62 ? 0 : 0.2 * (1 - 0.5 * u * u) + 0.02;
+        const rad = g.kxSide ? KX_R + 0.02 + 0.26 * (1 - 0.6 * u * u) : Math.abs(u) > 0.62 ? 0 : 0.2 * (1 - 0.5 * u * u) + 0.02;
         // a blade coming out of the water or going in, low beside the boat, catches the pole's lower end like the boat does
         // (higher up a paddler tilts the shaft past it). Through the middle of a gate the blades stay clear.
         const blade = !!blades && blades.some(b => b[1] > lv + 0.14 && b[1] < lv + 1.2 && Math.hypot(b[0] - ex, b[2] - ez) < 0.08);
         if ((d < rad || blade) && !(p.thrownT > 0)) {
           if (!p.contact) {
             p.contact = true;
-            const vl = B.vx * g.nx + B.vz * g.nz, vf = B.vx * g.fx + B.vz * g.fz, k = g.kxSide ? 0.5 : 0.35;
+            const vl = B.vx * g.nx + B.vz * g.nz, vf = B.vx * g.fx + B.vz * g.fz, k = g.kxSide ? 0.22 : 0.35;   // a Kayak Cross gate is heavy
             p.wz += vl * k; p.wx += vf * k;
             if (g.kxSide) { const f = p.botched ? 0.72 : 0.86; B.vx *= f; B.vz *= f; p.botched = false; splashSnd(0.12); }
             if (!g.touched && !g.missed) {
@@ -7405,25 +7411,27 @@ function animateC1(dt, st, q, drive, steer, k) {
   for (const key in t) C1P[key] += (t[key] - C1P[key]) * kc;
   c1Paddle.position.set(C1P.x, C1P.y, C1P.z); c1Paddle.rotation.set(C1P.rx, C1P.ry, C1P.rz);
 }
-// poles hang about 4.25 m below the cable to their lower end, buoys 3.6 m to their middle
-const POLE_HANG = CABLE_Y - POLE_TOP + POLE_LEN, BUOY_HANG = CABLE_Y - 0.78;
+// poles hang about 4.25 m below the cable to their lower end; a Kayak Cross pole is hit about 1.7 m below its platform
+const POLE_HANG = CABLE_Y - POLE_TOP + POLE_LEN, BUOY_HANG = 1.7;
 const swayF = p => 0.035 * Math.sin(T * 0.8 + p.ph) + 0.012 * Math.sin(T * 2.1 + p.ph * 1.7);
 const swayL = p => 0.025 * Math.sin(T * 0.63 + p.ph * 2.3);
 // where the lower end of a swinging pole (or the middle of a buoy) is right now
 function poleEnd(g, p) {
-  const L = g.kxSide ? BUOY_HANG : POLE_HANG, a = Math.sin(p.ax + swayF(p)) * L, b = Math.sin(p.az + swayL(p)) * L;
+  const L = g.kxSide ? BUOY_HANG : POLE_HANG, sw = g.kxSide ? 0.4 : 1, a = Math.sin(p.ax + swayF(p) * sw) * L, b = Math.sin(p.az + swayL(p) * sw) * L;
   return [p.x + g.fx * a + g.nx * b, p.z + g.fz * a + g.nz * b];
 }
 function swingPoles(dt) {
   for (const g of gates) for (const p of g.poles) {
     if (!p.obj) continue;
     if (p.ax !== 0 || p.az !== 0 || p.wx !== 0 || p.wz !== 0) {
-      p.wx += (-4.2 * p.ax - 0.7 * p.wx) * dt; p.wz += (-4.2 * p.az - 0.7 * p.wz) * dt;
-      const lim = p.thrownT > 0 ? 1.35 : 0.6;
+      const kx = !!g.kxSide, spring = kx ? 11 : 4.2, damp = kx ? 2.6 : 0.7;
+      p.wx += (-spring * p.ax - damp * p.wx) * dt; p.wz += (-spring * p.az - damp * p.wz) * dt;
+      const lim = kx ? (p.thrownT > 0 ? 0.62 : 0.32) : p.thrownT > 0 ? 1.35 : 0.6;
       p.ax = clamp(p.ax + p.wx * dt, -lim, lim); p.az = clamp(p.az + p.wz * dt, -lim, lim);
       if (Math.abs(p.ax) + Math.abs(p.az) + Math.abs(p.wx) + Math.abs(p.wz) < 1e-4) p.ax = p.az = p.wx = p.wz = 0;
     }
-    p.obj.rotation.set(p.ax + swayF(p), 0, p.az + swayL(p));
+    const sw = g.kxSide ? 0.4 : 1;
+    p.obj.rotation.set(p.ax + swayF(p) * sw, 0, p.az + swayL(p) * sw);
   }
 }
 
