@@ -1578,7 +1578,7 @@ window.WW_TR = {"en":{"Die künstliche Strecke in Pau am Fuss der Pyrenäen war 
 'use strict';
 const $ = id => document.getElementById(id);
 // shown in the menu and sent to the others: the same number on every phone means the same game
-const GAME_VERSION = 32, GAME_DATE = '04.11.2026';
+const GAME_VERSION = 33, GAME_DATE = '04.11.2026';
 const clamp = (v, a, b) => Math.max(a, Math.min(b, v));
 const REDUCED = matchMedia('(prefers-reduced-motion: reduce)').matches;
 
@@ -1873,6 +1873,12 @@ function addGate(i, s, lat, half, up) {
     done: false, touched: false, missed: false, cell: null,
   });
 }
+// move a gate along the river to s and across it to lat (its poles go with it)
+function shiftGate(g, s, lat) {
+  const n = bankNormal(s), f = flowDir(s);
+  Object.assign(g, { s, z: -s, nx: n[0], nz: n[1], fx: f[0], fz: f[1] });
+  moveGate(g, lat);
+}
 // move a gate across the river (its poles go with it)
 function moveGate(g, lat) {
   g.lat = lat; g.x = cx(g.s) + lat;
@@ -1980,6 +1986,22 @@ function generateCourse() {
     for (const g of gates) {
       g.kxSide = g.up ? -(Math.sign(g.lat) || 1) : (rnd() < 0.5 ? -1 : 1);
       g.poles = [g.poles[g.kxSide < 0 ? 0 : 1]];
+    }
+    // a red buoy counts once the whole boat is above it, so it hangs low enough in its eddy for a boat to fit above it
+    // on the way up. At Hüningen no buoy hangs closer than 2 m to a groyne head on its closed side (you can go round
+    // it) and it leaves 3 m on its open side; where the river is narrower than that, the room is shared.
+    for (const g of gates) {
+      let s1 = g.s;
+      if (g.up) { const e = eddies.find(e => g.s >= e.s && g.s <= e.s + e.L); if (e) s1 = Math.min(e.s + e.L - 1.5, Math.max(g.s, e.s + 7.5)); }
+      let bl = g.lat + g.kxSide * g.half;
+      if (hunOn()) {
+        const h = hw(s1); let lo = -h, hi = h;   // the free water across, between the banks and the groyne heads
+        for (const p of hunSpurs) if (Math.abs(p.s - s1) < p.w / 2 + 3) { if (p.side < 0) lo = Math.max(lo, -(h - p.len)); else hi = Math.min(hi, h - p.len); }
+        const c = g.kxSide, closed = c < 0 ? lo : hi, total = hi - lo, t0 = c * (closed - bl);
+        const t = total < 5 ? total * 0.4 : clamp(t0, 2, total - 3);
+        bl = closed - c * t;
+      }
+      if (s1 !== g.s || Math.abs(bl - (g.lat + g.kxSide * g.half)) > 0.01) shiftGate(g, s1, bl - g.kxSide * g.half);
     }
     const g3 = gates[3];
     rollZone = { a: g3.s + 8, b: g3.s + 19 };
@@ -5473,17 +5495,45 @@ function buildGates() {
   banner(mode === 'cross' ? -9.5 : 0, words[0], '#14222a', '#ffd21f', mode === 'cross' ? 6.4 : 4.5, mode !== 'cross');
   banner(FINISH_S, words[1], '#ffffff', '#d8261d', 4.5, true);
   if (rollZone) {
-    banner(rollZone.a, tr('ROLLZONE'), '#14222a', '#f2f0ea', 3.6, true, '#ffd21f');
-    banner(rollZone.b, tr('ENDE ROLLZONE'), '#14222a', '#f2f0ea', 3.6, true, '#ffd21f');
-    // floating buoys mark the zone across the river
-    const buoyMat = new THREE.MeshLambertMaterial({ color: 0xffd21f }), buoyGeo = new THREE.SphereGeometry(0.16, 10, 8);
-    for (const zs of [rollZone.a, rollZone.b]) {
-      const h = hw(zs), bank = bankNormal(zs);
-      for (let l = -h + 0.6; l <= h - 0.5; l += 1.1) { const b = new THREE.Mesh(buoyGeo, buoyMat); b.position.set(cx(zs) + bank[0] * l, level(zs) + 0.04, -zs + bank[1] * l); world.add(b); }
-    }
+    // as at the real races: a padded yellow bar hangs low across the river where the zone begins, and one where it ends
+    rollBar(rollZone.a, 'KAYAK ROLL ZONE');
+    rollBar(rollZone.b, tr('ENDE ROLLZONE'));
   }
   rampWalk = null;
   if (mode === 'cross') buildRamp();
+}
+// the roll zone's bar: a padded yellow tube on ropes from a cable, a little above a paddler's head. Its print runs along
+// it on the upstream and the downstream face (each readable from its side): black words between groups of black bars
+const ROLLBAR_Y = 1.4, ROLLBAR_R = 0.27;
+function rollBar(s, word) {
+  const grp = new THREE.Group(); grp.position.set(cx(s), level(s), -s); orientGroup(grp, s); world.add(grp);
+  const h = hw(s), len = 2 * h + 1.6, W = 256, around = W / (2 * Math.PI * ROLLBAR_R);   // canvas pixels per metre round the tube
+  const H = clamp(Math.round(len * around), 512, 4096), sx = (H / len) / around;
+  const tex = canvasTex(W, H, g => {
+    g.fillStyle = '#ffd21f'; g.fillRect(0, 0, W, H);
+    // the cylinder's texture runs round the tube across the canvas (the upstream face at a quarter, the downstream face
+    // at three quarters) and along the tube down the canvas, from the bar's left end as seen from upstream
+    const face = (cxF, dir) => {
+      g.save(); g.translate(cxF, dir > 0 ? 0 : H); g.rotate(dir * Math.PI / 2); g.scale(sx, 1);
+      // here x runs along the bar in metres times 'around', y across the face; the letters stand up toward the top of the bar
+      const L = H / sx, fs = Math.round(W * 0.17);
+      g.fillStyle = '#121416'; g.font = `800 ${fs}px "Barlow Condensed", "Arial Narrow", sans-serif`; g.textBaseline = 'middle';
+      const ww = g.measureText(word).width, bars = n => { for (let k = 0; k < n; k++) g.fillRect(x + k * fs * 0.32, -fs * 0.42, fs * 0.16, fs * 0.84); x += n * fs * 0.32 + fs * 0.4; };
+      let x = fs * 0.5;
+      while (x + ww + fs * 3 < L) { bars(5); g.fillText(word, x, 2); x += ww + fs * 0.6; }
+      if (x + fs * 2 < L) bars(Math.floor((L - x) / (fs * 0.32)) > 5 ? 5 : Math.max(1, Math.floor((L - x - fs * 0.4) / (fs * 0.32))));
+      g.restore();
+    };
+    face(W * 0.25, 1); face(W * 0.75, -1);
+  });
+  const bar = new THREE.Mesh(new THREE.CylinderGeometry(ROLLBAR_R, ROLLBAR_R, len, 28, 1, false, -Math.PI / 2), new THREE.MeshLambertMaterial({ map: tex }));
+  bar.rotation.z = Math.PI / 2; bar.position.y = ROLLBAR_Y; grp.add(bar);
+  // end caps a shade darker, the ropes up to a cable from bank to bank
+  const capMat = new THREE.MeshLambertMaterial({ color: 0xd9b215 });
+  for (const k of [-1, 1]) { const cap = new THREE.Mesh(new THREE.CircleGeometry(ROLLBAR_R, 20), capMat); cap.position.set(k * len / 2, ROLLBAR_Y, 0); cap.rotation.y = k * Math.PI / 2; grp.add(cap); }
+  const cable = new THREE.Mesh(new THREE.CylinderGeometry(0.014, 0.014, 2 * h + 6, 4), cableMat); cable.rotation.z = Math.PI / 2; cable.position.y = CABLE_Y; grp.add(cable);
+  for (const x of [-len * 0.36, 0, len * 0.36]) grp.add(new THREE.Line(new THREE.BufferGeometry().setFromPoints([new THREE.Vector3(x, ROLLBAR_Y + ROLLBAR_R, 0), new THREE.Vector3(x, CABLE_Y, 0)]), darkLine));
+  [-1, 1].forEach(k => { const lx = k * (h + 3), by = terrainBase(s, 3, k); const post = new THREE.Mesh(anchorGeo, anchorMat); post.scale.y = CABLE_Y + 0.4 - by; post.position.set(lx, by, 0); grp.add(post); });
 }
 // banner across the river at s; a line on the water below when it marks the start or the finish
 function banner(s, word, ink, bg, y, line, lineColor) {
