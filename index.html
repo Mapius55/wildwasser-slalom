@@ -1578,7 +1578,7 @@ window.WW_TR = {"en":{"Die künstliche Strecke in Pau am Fuss der Pyrenäen war 
 'use strict';
 const $ = id => document.getElementById(id);
 // shown in the menu and sent to the others: the same number on every phone means the same game
-const GAME_VERSION = 36, GAME_DATE = '04.11.2026';
+const GAME_VERSION = 37, GAME_DATE = '04.11.2026';
 const clamp = (v, a, b) => Math.max(a, Math.min(b, v));
 const REDUCED = matchMedia('(prefers-reduced-motion: reduce)').matches;
 
@@ -1711,7 +1711,7 @@ const RIVERS = {
   },
   vaires: {
     name: 'Paris 2024', lm: 'vaires', place: 'Vaires-sur-Marne, Frankreich', grade: 'WW III-IV', tags: ['Olympiastrecke 2024', 'Förderband', 'Ruderbecken'], seed: 2024,
-    narrows: 0, islands: 0, animal: null, venue: true, pools: true, firstDrop: 13,
+    narrows: 0, islands: 0, animal: null, venue: true, pools: true, firstDrop: 13, belt: true,
     // 300 m of concrete channel, 12 to 14 m wide, falling 4.5 m: a long C, so that start and finish lie near each other
     plan: [[-260, 130.00, 6.6], [-120, 60.00, 6.6], [-40, 20.00, 6.4], [0, -0.00, 6.2], [12, -5.81, 5.4], [24, -11.24, 5.6], [40, -17.89, 6.4], [80, -31.58, 6.8], [120, -41.05, 7.0], [160, -46.32, 6.7], [200, -47.37, 6.4], [240, -44.21, 6.8], [280, -36.84, 7.0], [320, -25.26, 6.6], [360, -9.47, 6.8], [400, 10.00, 6.8], [460, 40.00, 6.8], [560, 90.00, 6.8], [760, 190.00, 6.8], [1700, 660.00, 6.8]],
     bend: 0, width: 6.6, widthVar: 0, speed: 3.0, waveA: 1.55, waves: 14, holes: 7, surf: 1, falls: 0, sideFalls: 0, flags: false, people: true,
@@ -1724,7 +1724,7 @@ const RIVERS = {
   },
   sydney: {
     name: 'Sydney', lm: 'penrith', place: 'Penrith, Australien', grade: 'WW III', tags: ['Olympiastrecke 2000', 'Förderband', 'Kängurus'], seed: 2000,
-    narrows: 0, islands: 0, animal: 'kangaroo', venue: true,
+    narrows: 0, islands: 0, animal: 'kangaroo', venue: true, belt: true,
     bend: 1.15, width: 5.4, widthVar: 0.4, speed: 2.8, waveA: 1.5, waves: 13, holes: 7, surf: 1, falls: 0, sideFalls: 0, flags: false, people: true,
     style: 'channel', peaks: 'hills', sky: 0xd2e0e8, zenith: 0x3c86d4, fog: 0.0016, clouds: 7,
     deep: [0.05, 0.22, 0.24], shallow: [0.26, 0.34, 0.3],
@@ -2037,7 +2037,7 @@ function generateCourse() {
       let bl = g.lat + g.kxSide * g.half;
       if (hunOn()) {
         const h = hw(s1); let lo = -h, hi = h;   // the free water across, between the banks and the groyne heads
-        for (const p of hunSpurs) if (Math.abs(p.s - s1) < p.w / 2 + 3) { if (p.side < 0) lo = Math.max(lo, -(h - p.len)); else hi = Math.min(hi, h - p.len); }
+        for (const p of hunSpurs) { const dd = g.up ? p.s - s1 : s1 - p.s; if (dd > -(p.w / 2 + 3) && dd < p.w / 2 + 7) { if (p.side < 0) lo = Math.max(lo, -(h - p.len)); else hi = Math.min(hi, h - p.len); } }
         const c = g.kxSide, closed = c < 0 ? lo : hi, total = hi - lo, t0 = c * (closed - bl);
         const t = total < 5 ? total * 0.4 : clamp(t0, 2, total - 3);
         bl = closed - c * t;
@@ -2084,7 +2084,7 @@ function generateCourse() {
   // a course with a big drop just below the start (Vaires): a hole across the whole channel with a tongue through it, waves after
   if (RV.firstDrop) {
     const fs = RV.firstDrop, h = hw(fs);
-    holes.push({ s: fs, l0: -h - 1, l1: h + 1, k: 1.05, want: 'tongue' }); busy.push([fs - 4, fs + 6]);
+    holes.push({ s: fs, l0: -h - 1, l1: h + 1, k: 1.05, want: 'tongue' }); busy.push([fs - 4, fs + 17]);
     waveTrains.push({ s: fs + 4, L: 11, lam: 3.4, l0: -h * 0.75, l1: h * 0.75, A: 0.48 * RV.waveA });
   }
   // holes (Walzen): a drop with water recirculating back into it; one nearly spans the river
@@ -2721,7 +2721,7 @@ function buildPanorama() {
     town(150, 196, 2.2, s + 4, { walls: [[0.72, 0.76, 0.8], [0.62, 0.68, 0.74], [0.8, 0.82, 0.84]], windows: true, wide: 0.5, haze: 0.62 });
     tower(48, 0.7, 4.6, 'round', [0.78, 0.76, 0.74], 0.42); tower(51, 0.7, 4.6, 'round', [0.78, 0.76, 0.74], 0.42); tower(-70, 1.2, 2.8, 'onion', [0.82, 0.8, 0.76], 0.4);
     const near = paint(tips(range(s + 2, 0.32, 0.45, false, null, 4), 'leaf', 0.95, s + 2), { seed: s + 2, rock: [0.25, 0.32, 0.21], veg: [0.26, 0.35, 0.21], tree: 9, haze: 0.3, low: 0.5, hmax: 1.3, relief: 0.6 });
-    trees(near, 'leaf', -180, 180, 120, 1.2, s + 6, [0.22, 0.3, 0.18], 0.26);
+    trees(near, 'leaf', -179.9, 179.9, 120, 1.2, s + 6, [0.22, 0.3, 0.18], 0.26);
   } else if (lm === 'penrith') {
     // the Blue Mountains: a long flat escarpment, blue in the eucalyptus haze; gum trees nearer
     paint(plateaus(range(s, 1.4, 1, false, bumps(0.4, [0, 110, 0.8]), 4), [[0.2, 2.6], [0.45, 1.1]], s + 1, 0.1), { seed: s, rock: [0.4, 0.38, 0.36], veg: [0.24, 0.34, 0.44], tree: 2.1, haze: 0.4, low: 0.35, hmax: 3.5, relief: 1 });
@@ -3265,7 +3265,7 @@ function buildScenery() {
   const riverRockMat = new THREE.MeshPhongMaterial({ vertexColors: true, map: rockTex, shininess: 45, specular: 0x333333, color: 0xa29d92 });
   // on the artificial course the obstacles are concrete blocks that can be moved to reshape the rapids
   const omni = RV.lm === 'vaires';   // Vaires: movable polyethylene blocks on rails in the bed, light grey
-  const blockGeo = RV.style === 'channel' && RV.lm !== 'huningue' ? new THREE.BoxGeometry(omni ? 1.3 : 1.5, omni ? 0.95 : 1.2, omni ? 1.1 : 1.5) : null, blockMat = blockGeo ? (omni ? new THREE.MeshPhongMaterial({ color: 0xc9ccca, shininess: 30, specular: 0x333333 }) : new THREE.MeshLambertMaterial({ color: 0x8c8c88, map: rockTex })) : null;
+  const blockGeo = RV.style === 'channel' && RV.lm !== 'huningue' ? new THREE.BoxGeometry(omni ? 1.6 : 1.5, omni ? 0.95 : 1.2, omni ? 1.4 : 1.5) : null, blockMat = blockGeo ? (omni ? new THREE.MeshPhongMaterial({ color: 0xc9ccca, shininess: 30, specular: 0x333333 }) : new THREE.MeshLambertMaterial({ color: 0x8c8c88, map: rockTex })) : null;
   const pebbleGeo = RV.lm === 'huningue' ? new THREE.SphereGeometry(1, 20, 12) : null;
   const pebbleMats = pebbleGeo ? [new THREE.MeshPhongMaterial({ color: 0x55574f, shininess: 30, specular: 0x222222 }), new THREE.MeshLambertMaterial({ color: 0xe4e0d4 })] : null;
   rocks.forEach((r, i) => {
@@ -3322,18 +3322,20 @@ function buildScenery() {
   }
   if (RV.venue) {
     // grandstands along the finish and the start, a step per row
-    const standMat = new THREE.MeshLambertMaterial({ color: 0x9a9fa3 }), seatMat = new THREE.MeshLambertMaterial({ color: RV.lm === 'vaires' ? 0x283a8e : 0x2f6fb5 });
+    // the steps are merged into one mesh; a big stand seats fewer spectators on lower quality
+    const parts = [], stC = [0.6, 0.62, 0.64], seC = RV.lm === 'vaires' ? [0.16, 0.23, 0.56] : [0.18, 0.44, 0.71], big = { high: 0.55, mid: 0.3, low: 0.15 }[effQuality()] || 0.3;
     for (const [s0, side, len, rows = 6] of RV.stands ? RV.stands() : [[FINISH_S - 36, 1, 30], [mode === 'free' ? FINISH_S - 30 : 40, -1, 24], [-26, 1, 18]]) {
       const sm = s0 + len / 2, f = flowDir(sm), rotY = Math.atan2(-f[0], -f[1]), base = bankSurfaceH(sm, 6, side);
       for (let row = 0; row < rows; row++) {
         const d = 6.2 + row * 1.0, h = 0.5 * (row + 1), [x, , z] = bankPos(sm, d, side);
-        const step = new THREE.Mesh(new THREE.BoxGeometry(0.98, h, len), row % 2 ? seatMat : standMat);
-        step.position.set(x, base + h / 2 - 0.05, z); step.rotation.y = rotY; world.add(step);
-        for (let u = 0.6; u < len - 0.4; u += 0.62) if (r2() < (rows > 6 ? 0.55 : 0.8)) spots.push([s0 + u, side, d, base + h]);
+        const geo = new THREE.BoxGeometry(0.98, h, len); geo.applyMatrix4(new THREE.Matrix4().makeRotationY(rotY).setPosition(x, base + h / 2 - 0.05, z));
+        const c = row % 2 ? seC : stC; parts.push({ geo, shade: () => c });
+        for (let u = 0.6; u < len - 0.4; u += 0.62) if (r2() < (rows > 6 ? big : 0.8)) spots.push([s0 + u, side, d, base + h]);
       }
     }
+    if (parts.length) world.add(new THREE.Mesh(mergeParts(parts), vcMat()));
     // Vaires: people stand on the plateau's walk-on green roofs and look down on the finish
-    if (RV.lm === 'vaires') for (let k = 0; k < 70; k++) { const sp = FINISH_S - 116 + r2() * 102; spots.push([sp, 1, 15 + r2() * 11, bankSurfaceH(sp, 18, 1) + 6.0]); }
+    if (RV.lm === 'vaires') for (let k = 0; k < 70; k++) { const [b0, bl] = r2() < 0.43 ? [FINISH_S - 120, 46] : [FINISH_S - 66, 60], sp = b0 + 1 + r2() * (bl - 2); spots.push([sp, 1, 15 + r2() * 11, bankSurfaceH(b0 + bl / 2, 20, 1) + 6.25]); }
   }
   const crowdSide = () => RV.crowdSide || (r2() < 0.5 ? -1 : 1);
   if (RV.people) for (let k = 0; k < 45; k++) spots.push([-14 + r2() * 36, crowdSide()]);
@@ -3345,7 +3347,7 @@ function buildScenery() {
   if (spots.length) {
   const bodies = new THREE.InstancedMesh(bodyGeo, vcMat(), spots.length), heads = new THREE.InstancedMesh(headGeo, vcMat(), spots.length);
   spots.forEach(([s, side, dd, yy], k) => {
-    const d = (dd || 3.2 + r2() * 3.5) + (RV.lm === 'ivrea' && side > 0 && !dd && ivRampAt(s) ? 1.6 : 0), [x, y0, z] = bankPos(s, d, side), y = yy || y0, sc = 0.92 + r2() * 0.16;
+    const d = (dd || (RV.belt && side > 0 ? 6.6 + r2() * 3 : 3.2 + r2() * 3.5)) + (RV.lm === 'ivrea' && side > 0 && !dd && ivRampAt(s) ? 1.6 : 0), [x, y0, z] = bankPos(s, d, side), y = yy || y0, sc = 0.92 + r2() * 0.16;
     place(bodies, k, x, y, z, sc, sc, sc, yy ? side * Math.PI / 2 + Math.PI : r2() * 6); place(heads, k, x, y, z, sc, sc, sc, 0);
     C.setHex(jackets[Math.floor(r2() * jackets.length)]); bodies.setColorAt(k, C);
   });
@@ -4508,7 +4510,7 @@ function buildPlaces(r) {
   const concrete = new THREE.MeshLambertMaterial({ color: 0xa9a8a2, map: rockTex }), glass = new THREE.MeshPhongMaterial({ color: 0x2e3e48, shininess: 90, specular: 0x8899aa });
   const sideWater = new THREE.MeshPhongMaterial({ color: 0x3d7479, shininess: 90, specular: 0x7a9a9a });
   const flagsAt = (codes, s, side, d = 3.0) => codes.forEach((c, k) => flagPole(s + k * 3.2, d, side, c, 7.5));
-  const international = (host, s, side) => flagsAt([host, ...NATIONS.filter(n => n !== host).slice(0, 9)], s, side);
+  const international = (host, s, side, d) => flagsAt([host, ...NATIONS.filter(n => n !== host).slice(0, 9)], s, side, d);
   // the conveyor along the right bank that carries boats with their paddlers back up to the start
   const conveyor = () => {
     const beltY = s => terrainH(s, 4.3, 1) + 0.15, beltMat = new THREE.MeshLambertMaterial({ color: 0x24282b }), frameM = new THREE.MeshLambertMaterial({ color: 0x9aa0a4 });
@@ -4692,7 +4694,8 @@ function buildPlaces(r) {
     conveyor();
     // light masts along both banks
     for (let ls = -16; ls < FINISH_S + 24; ls += 34) for (const side of [-1, 1]) {
-      const [x, y, z] = atBank(ls, side < 0 ? 4.2 : 7.0, side), m = new THREE.Mesh(new THREE.CylinderGeometry(0.09, 0.14, 12, 6), steel); m.position.set(x, y + 6, z); world.add(m);
+      const md = side < 0 ? 4.2 : 7.0; if (plazaMask(ls, md, side) > 0.02 || apronAt(ls, md, side) > 0.02) continue;
+      const [x, y, z] = atBank(ls, md, side), m = new THREE.Mesh(new THREE.CylinderGeometry(0.09, 0.14, 12, 6), steel); m.position.set(x, y + 6, z); world.add(m);
       const lamp = new THREE.Mesh(new THREE.BoxGeometry(1.0, 0.3, 0.5), new THREE.MeshBasicMaterial({ color: 0xf6f4ea })); lamp.position.set(x, y + 12, z); lamp.rotation.y = yawAt(ls); world.add(lamp);
     }
     // the grandstand's front: the Games' colours, deep blue with arcs of pink, violet and green
@@ -4707,7 +4710,7 @@ function buildPlaces(r) {
       const f = new THREE.Mesh(new THREE.PlaneGeometry(len, 1.3), new THREE.MeshLambertMaterial({ map: t, side: THREE.DoubleSide })), [x, , z] = atBank(sm, 5.65, side);
       f.position.set(x, base + 0.6, z); f.rotation.y = yawAt(sm) + Math.PI / 2; world.add(f);
     }
-    flagsAt(['FR', 'FR'], -4, 1); international('FR', FINISH_S - 24, 1);
+    flagsAt(['FR', 'FR'], -4, 1, 8.2); international('FR', FINISH_S - 24, 1, 8.2);   // behind the conveyor
   }
   else if (lm === 'penrith') {
     // Penrith Lakes beside the course, and the conveyor that carries boats with their paddlers back up to the start
@@ -5620,8 +5623,8 @@ function buildGates() {
       const fb = new THREE.Mesh(buoyFootGeo, buoyFootMat); fb.position.y = -KX_LEN + 0.12; piv.add(fb);
       // the bridle from the platform's corners up to one point, and from there a rope to the cable
       for (const [x, z] of [[-0.4, -0.4], [0.4, -0.4], [0.4, 0.4], [-0.4, 0.4]]) piv.add(new THREE.Line(new THREE.BufferGeometry().setFromPoints([new THREE.Vector3(x, 0.07, z), new THREE.Vector3(0, 0.75, 0)]), darkLine));
-      grp.add(new THREE.Line(new THREE.BufferGeometry().setFromPoints([new THREE.Vector3(gt.kxSide * gt.half, KX_TOP + 0.75, 0), new THREE.Vector3(gt.kxSide * gt.half, CABLE_Y, 0)]), darkLine));
-      gt.poles[0].obj = piv;
+      const rope = new THREE.Line(new THREE.BufferGeometry().setFromPoints([new THREE.Vector3(gt.kxSide * gt.half, KX_TOP + 0.75, 0), new THREE.Vector3(gt.kxSide * gt.half, CABLE_Y, 0)]), darkLine); grp.add(rope);
+      gt.poles[0].obj = piv; gt.poles[0].rope = rope;   // its lower end follows the bridle (swingPoles)
     } else gt.poles.forEach((p, k) => {
       const piv = new THREE.Group(); piv.position.set((k ? 1 : -1) * gt.half, CABLE_Y, 0); grp.add(piv);
       const pole = new THREE.Mesh(poleGeo, gt.up ? poleMatUp : poleMat); pole.position.y = -(CABLE_Y - POLE_TOP) - POLE_LEN / 2; piv.add(pole);
@@ -5658,9 +5661,11 @@ function buildGates() {
 }
 // the roll zone's bar: a padded yellow tube on ropes from a cable, a little above a paddler's head. Its print runs along
 // it on the upstream and the downstream face (each readable from its side): black words between groups of black bars
-const ROLLBAR_Y = 1.4, ROLLBAR_R = 0.27;
+const ROLLBAR_Y = 2.1, ROLLBAR_R = 0.27;   // its underside 1.8 m above the water: over a paddler's head and raised blade
 function rollBar(s, word) {
-  const grp = new THREE.Group(); grp.position.set(cx(s), level(s), -s); orientGroup(grp, s); world.add(grp);
+  // over a wave train the bar hangs as much higher as the water stands there
+  let top = 0; for (const ds of [-1.5, 0, 1.5]) for (let l = -hw(s); l <= hw(s); l += 0.5) top = Math.max(top, staticH(s + ds, l));
+  const grp = new THREE.Group(); grp.position.set(cx(s), level(s) + top, -s); orientGroup(grp, s); world.add(grp);
   const h = hw(s), len = 2 * h + 1.6, W = 256, around = W / (2 * Math.PI * ROLLBAR_R);   // canvas pixels per metre round the tube
   const H = clamp(Math.round(len * around), 512, 4096), sx = (H / len) / around;
   const tex = canvasTex(W, H, g => {
@@ -5680,14 +5685,14 @@ function rollBar(s, word) {
     };
     face(W * 0.25, 1); face(W * 0.75, -1);
   });
-  const bar = new THREE.Mesh(new THREE.CylinderGeometry(ROLLBAR_R, ROLLBAR_R, len, 28, 1, false, -Math.PI / 2), new THREE.MeshLambertMaterial({ map: tex }));
+  const bar = new THREE.Mesh(new THREE.CylinderGeometry(ROLLBAR_R, ROLLBAR_R, len, 28, 1, true, -Math.PI / 2), new THREE.MeshLambertMaterial({ map: tex }));
   bar.rotation.z = Math.PI / 2; bar.position.y = ROLLBAR_Y; grp.add(bar);
   // end caps a shade darker, the ropes up to a cable from bank to bank
   const capMat = new THREE.MeshLambertMaterial({ color: 0xd9b215 });
   for (const k of [-1, 1]) { const cap = new THREE.Mesh(new THREE.CircleGeometry(ROLLBAR_R, 20), capMat); cap.position.set(k * len / 2, ROLLBAR_Y, 0); cap.rotation.y = k * Math.PI / 2; grp.add(cap); }
   const cable = new THREE.Mesh(new THREE.CylinderGeometry(0.014, 0.014, 2 * h + 6, 4), cableMat); cable.rotation.z = Math.PI / 2; cable.position.y = CABLE_Y; grp.add(cable);
   for (const x of [-len * 0.36, 0, len * 0.36]) grp.add(new THREE.Line(new THREE.BufferGeometry().setFromPoints([new THREE.Vector3(x, ROLLBAR_Y + ROLLBAR_R, 0), new THREE.Vector3(x, CABLE_Y, 0)]), darkLine));
-  [-1, 1].forEach(k => { const lx = k * (h + 3), by = terrainBase(s, 3, k); const post = new THREE.Mesh(anchorGeo, anchorMat); post.scale.y = CABLE_Y + 0.4 - by; post.position.set(lx, by, 0); grp.add(post); });
+  [-1, 1].forEach(k => { const lx = k * (h + 3), by = terrainBase(s, 3, k) - top; const post = new THREE.Mesh(anchorGeo, anchorMat); post.scale.y = CABLE_Y + 0.4 - by; post.position.set(lx, by, 0); grp.add(post); });
 }
 // banner across the river at s; a line on the water below when it marks the start or the finish
 function banner(s, word, ink, bg, y, line, lineColor) {
@@ -6516,7 +6521,7 @@ function throwBuoy() {
   const p = g.poles[0];
   if (throwGame.t < 0.4) {
     p.thrownT = clamp(5.5 / Math.max(0.5, Math.hypot(B.vx, B.vz)), 1.4, 3); p.botched = false;   // until the stern is past too
-    p.wx += 2.0 * Math.sign(B.vx * g.fx + B.vz * g.fz || 1); p.wz += -g.kxSide * 1.0;   // pushed aside, out to its closed side: it is heavy and stiff
+    p.wx += 2.0 * Math.sign(B.vx * g.fx + B.vz * g.fz || 1); p.wz += g.kxSide * 1.0;   // pushed aside to its closed side, away from the boat passing on the open side; it is heavy and stiff
     toast(tr('Weggeworfen!'), 'ok'); tone(700, 0.08, 'triangle', 0.14); tone(980, 0.12, 'triangle', 0.14, 0.07); splashSnd(0.15);
   } else { p.botched = true; toast(tr('Zu früh!'), 'miss'); tone(200, 0.2, 'square', 0.1); }
   throwGame.g = null; $('throwRing').hidden = true;
@@ -7550,6 +7555,7 @@ function poleEnd(g, p) {
   const L = g.kxSide ? BUOY_HANG : POLE_HANG, sw = g.kxSide ? 0.4 : 1, a = Math.sin(p.ax + swayF(p) * sw) * L, b = Math.sin(p.az + swayL(p) * sw) * L;
   return [p.x + g.fx * a + g.nx * b, p.z + g.fz * a + g.nz * b];
 }
+const _ra = new THREE.Vector3();
 function swingPoles(dt) {
   for (const g of gates) for (const p of g.poles) {
     if (!p.obj) continue;
@@ -7562,6 +7568,7 @@ function swingPoles(dt) {
     }
     const sw = g.kxSide ? 0.4 : 1;
     p.obj.rotation.set(p.ax + swayF(p) * sw, 0, p.az + swayL(p) * sw);
+    if (p.rope) { _ra.set(0, 0.75, 0).applyEuler(p.obj.rotation).add(p.obj.position); const a = p.rope.geometry.attributes.position; a.setXYZ(0, _ra.x, _ra.y, _ra.z); a.needsUpdate = true; }
   }
 }
 
