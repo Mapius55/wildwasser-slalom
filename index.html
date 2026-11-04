@@ -1578,7 +1578,7 @@ window.WW_TR = {"en":{"Die künstliche Strecke in Pau am Fuss der Pyrenäen war 
 'use strict';
 const $ = id => document.getElementById(id);
 // shown in the menu and sent to the others: the same number on every phone means the same game
-const GAME_VERSION = 33, GAME_DATE = '04.11.2026';
+const GAME_VERSION = 34, GAME_DATE = '04.11.2026';
 const clamp = (v, a, b) => Math.max(a, Math.min(b, v));
 const REDUCED = matchMedia('(prefers-reduced-motion: reduce)').matches;
 
@@ -5431,17 +5431,37 @@ function boardTex(text, back, big) {
 }
 // which side of a buoy to pass, as the paddler sees it: going down you face downstream, going up you face upstream
 const kxPassLeft = g => (g.kxSide > 0) !== g.up;
-function arrowTex(right, up) {
-  return canvasTex(128, 64, (g, W, H) => {
-    g.fillStyle = up ? '#ff0000' : '#008b29'; g.fillRect(0, 0, W, H);
-    g.fillStyle = '#fff'; g.save(); if (!right) { g.translate(W, 0); g.scale(-1, 1); }
-    g.beginPath(); g.moveTo(14, 24); g.lineTo(74, 24); g.lineTo(74, 8); g.lineTo(116, 32); g.lineTo(74, 56); g.lineTo(74, 40); g.lineTo(14, 40); g.closePath(); g.fill(); g.restore();
+// the bands printed on a Kayak Cross buoy, as at the races. Round a vertical tube the texture runs across the canvas:
+// the face toward paddlers coming down at a quarter, the face toward those going up at three quarters, each read
+// left to right by its own viewer
+const kxBandCache = new Map();
+function chevTex(frontRight) {
+  const key = 'c' + frontRight; if (kxBandCache.has(key)) return kxBandCache.get(key);
+  const t = canvasTex(512, 128, (g, W, H) => {
+    g.fillStyle = '#f4f4f0'; g.fillRect(0, 0, W, H);
+    g.strokeStyle = '#141618'; g.lineWidth = 17; g.lineJoin = 'miter'; g.lineCap = 'butt';
+    for (const [c, right] of [[W * 0.25, frontRight], [W * 0.75, !frontRight]]) for (const k of [-1, 1]) {
+      const x = c + k * 24, d = right ? 1 : -1;   // two chevrons side by side, pointing to the side to pass
+      g.beginPath(); g.moveTo(x - d * 16, H * 0.16); g.lineTo(x + d * 16, H * 0.5); g.lineTo(x - d * 16, H * 0.84); g.stroke();
+    }
   });
+  t.__keep = true; kxBandCache.set(key, t); return t;   // kept across rivers
+}
+function kxNumTex(n) {
+  const key = 'n' + n; if (kxBandCache.has(key)) return kxBandCache.get(key);
+  const t = canvasTex(512, 64, (g, W, H) => {
+    g.fillStyle = '#f4f4f0'; g.fillRect(0, 0, W, H);
+    g.fillStyle = '#141618'; g.font = `800 ${Math.round(H * 0.84)}px "Barlow Condensed", "Arial Narrow", sans-serif`; g.textAlign = 'center'; g.textBaseline = 'middle';
+    for (const c of [0, 0.25, 0.5, 0.75, 1]) g.fillText(n, W * c, H / 2 + 2);
+  });
+  t.__keep = true; kxBandCache.set(key, t); return t;
 }
 // Kayak Cross buoys in the ICF colours: green RAL 6037, red RAL 3024
 const buoyGeo = shared(new THREE.CylinderGeometry(0.21, 0.21, 1.2, 18)), buoyBandGeo = shared(new THREE.CylinderGeometry(0.215, 0.215, 0.14, 18));
 const buoyMat = shared(new THREE.MeshPhongMaterial({ color: 0x008b29, shininess: 40, specular: 0x333333 })), buoyMatUp = shared(new THREE.MeshPhongMaterial({ color: 0xff0000, shininess: 40, specular: 0x333333 }));
 const buoyBandMat = shared(new THREE.MeshLambertMaterial({ color: 0xf2f2ee }));
+const kxBand = h => shared(new THREE.CylinderGeometry(0.216, 0.216, h, 24, 1, true, -Math.PI / 2));
+const buoyNumGeo = kxBand(0.17), buoyChevGeo = kxBand(0.28), buoyFootGeo = kxBand(0.14), buoyFootMat = shared(new THREE.MeshLambertMaterial({ color: 0x2457b5 }));
 const anchorGeo = shared(new THREE.CylinderGeometry(0.06, 0.08, 1, 8).translate(0, 0.5, 0));
 const anchorMat = shared(new THREE.MeshLambertMaterial({ color: 0x6d757a }));
 shared(darkLine);
@@ -5458,7 +5478,11 @@ function buildGates() {
       // padded buoy on a rope, its bottom just above the water
       const piv = new THREE.Group(); piv.position.set(gt.kxSide * gt.half, CABLE_Y, 0); grp.add(piv);
       const buoy = new THREE.Mesh(buoyGeo, gt.up ? buoyMatUp : buoyMat); buoy.position.y = -(CABLE_Y - 0.78); piv.add(buoy);
-      const band = new THREE.Mesh(buoyBandGeo, buoyBandMat); band.position.y = -(CABLE_Y - 1.18); piv.add(band);
+      // the number on a white band at the top, two black chevrons on a white band pointing to the side to pass, a blue foot
+      const passX = -gt.kxSide;   // the open side, along the group's x
+      const nb = new THREE.Mesh(buoyNumGeo, new THREE.MeshLambertMaterial({ map: kxNumTex(String(gt.i + 1)) })); nb.position.y = -(CABLE_Y - 1.2); piv.add(nb);
+      const cb = new THREE.Mesh(buoyChevGeo, new THREE.MeshLambertMaterial({ map: chevTex(passX > 0) })); cb.position.y = -(CABLE_Y - 0.84); piv.add(cb);
+      const fb = new THREE.Mesh(buoyFootGeo, buoyFootMat); fb.position.y = -(CABLE_Y - 0.31); piv.add(fb);
       const lg = new THREE.BufferGeometry().setFromPoints([new THREE.Vector3(0, 0, 0), new THREE.Vector3(0, -(CABLE_Y - 1.36), 0)]);
       piv.add(new THREE.Line(lg, darkLine));
       gt.poles[0].obj = piv;
@@ -5476,12 +5500,6 @@ function buildGates() {
     back.position.set(bx, CABLE_Y - 0.75, -0.01); back.rotation.y = Math.PI; grp.add(back);
     if (gt.kxSide) {
       front.position.y = back.position.y = CABLE_Y - 0.5; front.scale.setScalar(0.7); back.scale.setScalar(0.7);
-      // an arrow under the number points to the side to pass: the front faces paddlers coming down, the back those going up
-      const passX = -gt.kxSide;   // the open side, along the group's x
-      for (const [z, rotY, right] of [[0.012, 0, passX > 0], [-0.012, Math.PI, passX < 0]]) {
-        const ar = new THREE.Mesh(new THREE.PlaneGeometry(0.8, 0.4), new THREE.MeshBasicMaterial({ map: arrowTex(right, gt.up) }));
-        ar.position.set(bx, CABLE_Y - 1.05, z); ar.rotation.y = rotY; grp.add(ar);
-      }
     }
     const lg = new THREE.BufferGeometry().setFromPoints([new THREE.Vector3(bx, CABLE_Y, 0), new THREE.Vector3(bx, CABLE_Y - (gt.kxSide ? 0.25 : 0.44), 0)]);
     grp.add(new THREE.Line(lg, darkLine));
