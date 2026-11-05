@@ -1578,7 +1578,7 @@ window.WW_TR = {"en":{"Die künstliche Strecke in Pau am Fuss der Pyrenäen war 
 'use strict';
 const $ = id => document.getElementById(id);
 // shown in the menu and sent to the others: the same number on every phone means the same game
-const GAME_VERSION = 37, GAME_DATE = '04.11.2026';
+const GAME_VERSION = 38, GAME_DATE = '05.11.2026';
 const clamp = (v, a, b) => Math.max(a, Math.min(b, v));
 const REDUCED = matchMedia('(prefers-reduced-motion: reduce)').matches;
 
@@ -5807,6 +5807,72 @@ function kayakGeo(deck) {
   g.setIndex(idx); g.computeVertexNormals();
   return g;
 }
+// Kayak Cross is paddled in short plastic river-running boats (shaped like a Pyranha Ripper Evo): 2.75 m, a round,
+// high nose that rocks up with a ridge along its deck, the widest point just ahead of the cockpit, and a long, low, flat
+// tail with hard edges. u runs across, v from bow to stern, as on the slalom kayak
+const CROSS_CROWN = [[0, 0.02], [0.05, 0.06], [0.18, 0.18], [0.28, 0.13], [0.36, 0.115], [0.5, 0.12], [0.62, 0.08], [0.75, 0.05], [1, 0.03]];   // down to the cockpit's rim
+function crossCrown(t) {
+  let i = 0; while (i < CROSS_CROWN.length - 2 && CROSS_CROWN[i + 1][0] < t) i++;
+  const [t0, a] = CROSS_CROWN[i], [t1, b] = CROSS_CROWN[i + 1], u = ss(t0, t1, t);
+  return a + (b - a) * u;
+}
+function crossGeo(deck) {
+  const NZ = 72, NU = 22, Z0 = -1.27, Z1 = 1.48, pos = [], uv = [], idx = [];
+  for (let i = 0; i <= NZ; i++) {
+    const t = i / NZ, z = Z0 + (Z1 - Z0) * t;
+    const w = (t < 0.4 ? 0.335 * Math.pow(Math.sin(Math.PI / 2 * t / 0.4), 0.42) : 0.335 - 0.23 * Math.pow((t - 0.4) / 0.6, 1.3)) * ss(1, 0.988, t);   // a blunt, square-ish tail
+    const keel = -0.11 + (t < 0.33 ? 0.3 * Math.pow(1 - t / 0.33, 2.2) : 0.015 * (t - 0.33) / 0.67);
+    const edge = keel + 0.2 + 0.03 * Math.sin(Math.PI * Math.min(1, t / 0.7)) - 0.12 * ss(0.62, 1, t);
+    // the deck: a big hump of volume ahead of the cockpit, up to the cockpit's rim, falling away to almost nothing at the tail
+    const crown = crossCrown(t);
+    const flat = 2.2 + 3.5 * ss(0.35, 0.9, t);   // the hull: round in the bow, flat with hard edges toward the tail
+    for (let j = 0; j <= NU; j++) {
+      const u = -1 + 2 * j / NU, a = Math.abs(u);
+      pos.push(u * w, deck ? edge + crown * (0.55 * Math.pow(1 - u * u, 0.7) + 0.45 * (1 - a)) : keel + (edge - keel) * Math.pow(a, flat), z);
+      uv.push(j / NU, t);
+    }
+  }
+  for (let i = 0; i < NZ; i++) for (let j = 0; j < NU; j++) {
+    const a = i * (NU + 1) + j, b = a + NU + 1;
+    if (deck) idx.push(a, b, a + 1, b, b + 1, a + 1); else idx.push(a, a + 1, b, b, a + 1, b + 1);
+  }
+  const g = new THREE.BufferGeometry();
+  g.setAttribute('position', new THREE.Float32BufferAttribute(pos, 3));
+  g.setAttribute('uv', new THREE.Float32BufferAttribute(uv, 2));
+  g.setIndex(idx); g.computeVertexNormals();
+  return g;
+}
+// rotomoulded plastic: the boat's colour, a darker cloud speckled into it over the nose and the tail
+const crossTexCache = new Map();
+function crossAccent(color) {
+  const hsl = {}; new THREE.Color(color).getHSL(hsl);
+  if (hsl.l < 0.28) return '#d9d6cf';
+  if (hsl.h > 0.04 && hsl.h < 0.45) return '#1b1c1e';   // orange, yellow, lime, green: black
+  return '#1c2a55';   // red, blue, purple: navy
+}
+function crossTex(color) {
+  if (crossTexCache.has(color)) return crossTexCache.get(color);
+  const acc = crossAccent(color), r = mulberry32(color.length * 131 + parseInt(color.slice(1), 16) % 9973);
+  const t = canvasTex(128, 512, (g, W, H) => {
+    g.fillStyle = color; g.fillRect(0, 0, W, H);
+    // the nose, and the tail on one side more than the other, with ragged edges
+    const edgeAt = (y0, amp, k) => x => y0 + amp * Math.sin(x / W * Math.PI * k + 0.7) + (r() - 0.5) * 10;
+    const nose = edgeAt(H * 0.17, H * 0.035, 1.3), tail = edgeAt(H * 0.74, H * 0.06, 0.9);
+    g.fillStyle = acc;
+    for (let x = 0; x < W; x += 2) { g.fillRect(x, 0, 2, nose(x)); const ty = tail(x) + (x / W) * H * 0.05; g.fillRect(x, ty, 2, H - ty); }
+    // speckle across each edge, as the two colours of powder melt into each other in the mould
+    for (let k = 0; k < 2600; k++) {
+      const x = r() * W, nearNose = r() < 0.5, y0 = nearNose ? nose(x) : tail(x) + (x / W) * H * 0.05, y = y0 + (r() - 0.5) * H * (nearNose ? 0.07 : 0.1), sz = 1 + r() * 2.2;
+      g.fillStyle = (nearNose ? y > y0 : y < y0) ? acc : color; g.globalAlpha = 0.85; g.fillRect(x, y, sz, sz);
+    }
+    g.globalAlpha = 1;
+    // a faint shine line along the deck's ridge
+    g.strokeStyle = 'rgba(255,255,255,0.08)'; g.lineWidth = 3; g.beginPath(); g.moveTo(W / 2, 0); g.lineTo(W / 2, H); g.stroke();
+  });
+  t.flipY = false; t.__keep = true; crossTexCache.set(color, t); return t;
+}
+const crossDeckGeo = crossGeo(true), crossHullGeo = crossGeo(false);
+crossDeckGeo.__keep = crossHullGeo.__keep = true;
 const deckTex = canvasTex(128, 512, (g, W, H) => {
   // u runs across the deck, v from bow (top) to stern (bottom)
   g.fillStyle = '#f2f0ea'; g.fillRect(0, 0, W, H);
@@ -5820,6 +5886,7 @@ const deckTex = canvasTex(128, 512, (g, W, H) => {
 deckTex.flipY = false;
 const deckMesh = new THREE.Mesh(kayakGeo(true), new THREE.MeshPhongMaterial({ map: deckTex, shininess: 70, specular: 0x555555 }));
 const hullMesh = new THREE.Mesh(kayakGeo(false), new THREE.MeshPhongMaterial({ color: 0x1c2125, shininess: 60, specular: 0x444444 }));
+const slalomDeckGeo = deckMesh.geometry, slalomHullGeo = hullMesh.geometry, slalomHullMat = hullMesh.material;
 rig.add(deckMesh, hullMesh);
 const neopreneMat = new THREE.MeshPhongMaterial({ color: 0x16191b, shininess: 12, specular: 0x222222 });
 const rim = new THREE.Mesh(new THREE.TorusGeometry(0.3, 0.022, 8, 32), new THREE.MeshPhongMaterial({ color: 0x0f1113, shininess: 50 }));
@@ -5831,7 +5898,17 @@ tunnel.position.set(0, 0.36, 0.16); rig.add(tunnel);
 // the open cockpit of an empty boat
 const cockpitHole = new THREE.Mesh(new THREE.CircleGeometry(0.285, 28), new THREE.MeshBasicMaterial({ color: 0x07090a }));
 cockpitHole.rotation.x = -Math.PI / 2; cockpitHole.scale.set(1, 1.38, 1); cockpitHole.position.set(0, 0.24, 0.12); cockpitHole.visible = false; rig.add(cockpitHole);
-[-1.5, 1.7].forEach(z => { const m = new THREE.Mesh(new THREE.TorusGeometry(0.03, 0.007, 6, 12), new THREE.MeshLambertMaterial({ color: 0x111111 })); m.rotation.x = Math.PI / 2; m.position.set(0, 0.075, z); rig.add(m); });
+const endLoops = [-1.5, 1.7].map(z => { const m = new THREE.Mesh(new THREE.TorusGeometry(0.03, 0.007, 6, 12), new THREE.MeshLambertMaterial({ color: 0x111111 })); m.rotation.x = Math.PI / 2; m.position.set(0, 0.075, z); rig.add(m); return m; });
+// your boat: a slalom kayak or canoe, in Kayak Cross a plastic cross boat in your colour (the grab loops on its deck)
+function syncBoatLook() {
+  const kx = mode === 'cross';
+  deckMesh.geometry = kx ? crossDeckGeo : slalomDeckGeo; hullMesh.geometry = kx ? crossHullGeo : slalomHullGeo;
+  if (kx) { deckMesh.material.map = crossTex(myColor); deckMesh.material.color.set(0xffffff); deckMesh.material.needsUpdate = true; hullMesh.material = deckMesh.material; }
+  else { dressDeck(deckMesh.material, mySkin, myColor); hullMesh.material = slalomHullMat; }
+  endLoops[0].position.set(0, kx ? 0.2 : 0.075, kx ? -1.13 : -1.5); endLoops[1].position.set(0, kx ? -0.02 : 0.075, kx ? 1.33 : 1.7);
+  cockpitHole.position.y = kx ? 0.256 : 0.24;   // the cross boat's deck comes up to its rim
+}
+
 
 const paddle = new THREE.Group(); paddle.rotation.order = 'YZX'; paddle.position.set(0, 0.55, -0.42); rig.add(paddle);
 {
@@ -6446,8 +6523,8 @@ const penalties = () => mode === 'cross' ? 0 : gates.reduce((a, g) => a + (g.mis
 
 // ---------- physics ----------
 function hullPts() {
-  const fx = -Math.sin(B.yaw), fz = -Math.cos(B.yaw);
-  return [[B.x + fx * 1.6, B.z + fz * 1.6], [B.x, B.z], [B.x - fx * 1.7, B.z - fz * 1.7]];
+  const fx = -Math.sin(B.yaw), fz = -Math.cos(B.yaw), bow = mode === 'cross' ? 1.25 : 1.6, stern = mode === 'cross' ? 1.45 : 1.7;   // a cross boat is 2.75 m
+  return [[B.x + fx * bow, B.z + fz * bow], [B.x, B.z], [B.x - fx * stern, B.z - fz * stern]];
 }
 // ---------- goals and points (free ride) ----------
 const GOALS = [
@@ -7575,7 +7652,7 @@ function swingPoles(dt) {
 // ================= Flow control =================
 function syncUI() {
   announce();
-  document.body.classList.toggle('c1', boatNow() === 'c1'); syncC1Ui();
+  document.body.classList.toggle('c1', boatNow() === 'c1'); syncC1Ui(); syncBoatLook();
   const playing = state === 'ready' || state === 'racing' || state === 'finished';
   $('hud').hidden = !(playing || state === 'paused'); $('hud').inert = state === 'paused';
   $('touch').hidden = !(isTouch && (state === 'ready' || state === 'racing'));
@@ -7682,7 +7759,7 @@ let myColor = BOAT_COLORS.includes(PREF.color) ? PREF.color : BOAT_COLORS[Math.f
 if (PREF.mode === 'race' || PREF.mode === 'free' || PREF.mode === 'cross') mode = PREF.mode;
 if (!location.hash && RIVERS[PREF.river]) riverId = PREF.river;
 function savePrefs() { try { localStorage.setItem('wwslalom.prefs', JSON.stringify({ nick: myNick, color: myColor, mode: mode === 'learn' ? 'race' : mode, river: mode === 'learn' ? 'kanal' : riverId, boat, lang, quality, course: courseMode, flow: flowMode, ctl: ctlMode, ctlv: 2, proSeen: !!PREF.proSeen, size: uiSize, kit: !!PREF.kit, upSeen: PREF.upSeen || 0, map: mapOn, music: musicOn, skin: mySkin, c1side: c1Home, profile })); } catch (e) { /* storage blocked */ } if (typeof profileDirty === 'function') profileDirty(); }
-function applyBoatColor() { dressDeck(deckMesh.material, mySkin, myColor); sleeveMat.color.set(myColor); if ($('careerSkins').children.length) renderCareer(); }
+function applyBoatColor() { syncBoatLook(); sleeveMat.color.set(myColor); if ($('careerSkins').children.length) renderCareer(); }
 function refreshIntro() {
   for (const b of $('rivers').children) {
     const id = b.dataset.river, r = RIVERS[id];
@@ -8107,7 +8184,7 @@ function makeAvatar() {
   const g = new THREE.Group(); g.rotation.order = 'YXZ';
   const deckMat = new THREE.MeshPhongMaterial({ map: deckTex, shininess: 70, specular: 0x555555 });
   const vestMat = new THREE.MeshLambertMaterial();
-  g.add(new THREE.Mesh(remoteDeckGeo, deckMat), new THREE.Mesh(remoteHullGeo, hullMesh.material));
+  const deckM = new THREE.Mesh(remoteDeckGeo, deckMat), hullM = new THREE.Mesh(remoteHullGeo, slalomHullMat); g.add(deckM, hullM);
   const sd = new THREE.Mesh(sprayDeck.geometry, neopreneMat); sd.scale.copy(sprayDeck.scale); sd.position.copy(sprayDeck.position); g.add(sd);
   const torso = new THREE.Mesh(torsoGeo, vestMat); torso.position.set(0, 0.5, 0.12); g.add(torso);
   const head = new THREE.Mesh(headGeo, skinMat); head.position.set(0, 0.88, 0.12); g.add(head);
@@ -8126,8 +8203,14 @@ function makeAvatar() {
   const phe = new THREE.Mesh(helmetGeo, helmetMat); phe.position.y = 1.57; person.add(phe);
   const shirtMat = new THREE.MeshLambertMaterial({ color: 0x8796a4 });
   const pArms = [-1, 1].map(k => { const a = new THREE.Mesh(armDownGeo, vestMat); a.position.set(k * 0.21, 1.36, 0); a.rotation.z = k * 0.12; person.add(a); return a; });
-  return { g, pad, pad1, hands1: pad1.children.slice(-2), pHelmet: phe, pTorso: pt, pArms, shirtMat, gr: 7, deckMat, vestMat, arms: [armL, armR], hands: pad.children.slice(-2), tag: null, nick: '', color: '', cur: null, target: null,
+  return { g, deckM, hullM, pad, pad1, hands1: pad1.children.slice(-2), pHelmet: phe, pTorso: pt, pArms, shirtMat, gr: 7, deckMat, vestMat, arms: [armL, armR], hands: pad.children.slice(-2), tag: null, nick: '', color: '', cur: null, target: null,
     person, legs, crew: [torso, head, helmet, pad, armL, armR], torso, head, helmet, boat: 'k1', cp: null, cpCur: null, foot: null, footCur: null, bubble: null, bubbleUntil: 0 };
+}
+// a paddler's boat: a cross boat in Kayak Cross, else the slalom kayak with its design
+function avatarBoat(a, cross, skin, color) {
+  a.deckM.geometry = cross ? crossDeckGeo : remoteDeckGeo; a.hullM.geometry = cross ? crossHullGeo : remoteHullGeo;
+  if (cross) { a.deckMat.map = crossTex(color); a.deckMat.color.set(0xffffff); a.deckMat.needsUpdate = true; a.hullM.material = a.deckMat; }
+  else { dressDeck(a.deckMat, skin, color); a.hullM.material = slalomHullMat; }
 }
 function removeAvatar(peer) {
   const a = avatars.get(peer); if (!a) return;
@@ -8150,7 +8233,8 @@ function syncAvatars(peers) {
     const color = safeColor(pr.color), nick = cleanNick(pr.nick);
     if (a.color !== color) { a.color = color; a.vestMat.color.set(color); }
     const skin = SKINS.some(k => k[0] === pr.sk) ? pr.sk : 'klassik';
-    if (a.deckKey !== skin + color) { a.deckKey = skin + color; dressDeck(a.deckMat, skin, color); }
+    const kxBoat = pr.mode === 'cross';
+    if (a.deckKey !== skin + color + kxBoat) { a.deckKey = skin + color + kxBoat; avatarBoat(a, kxBoat, skin, color); }
     if (a.nick !== nick) {
       a.nick = nick;
       if (a.tag) { a.g.remove(a.tag); a.tag.material.map.dispose(); a.tag.material.dispose(); }
@@ -8520,7 +8604,7 @@ function makeBots() {
   const names = BOT_NAMES.slice().sort(() => r() - 0.5), colors = BOAT_COLORS.filter(c => c !== myColor);
   for (let k = 0; k < 3; k++) {
     const av = makeAvatar(), color = colors[k % colors.length];
-    av.deckMat.color.set(0xffffff).lerp(new THREE.Color(color), 0.7); av.vestMat.color.set(color);
+    avatarBoat(av, true, 'klassik', color); av.vestMat.color.set(color);
     av.tag = nameTag(names[k]); av.g.add(av.tag);
     const skill = 0.74 + r() * 0.1 + kx.round * 0.07 + careerD * 0.06;
     const b = { name: names[k], color, av, skill, lane: lanes[k], s: RAMP.s0 - 1.75, lat: laneLat(lanes[k]), x: 0, z: 0, y: 0, vy: 0, yaw: 0, v: 0,
