@@ -1614,7 +1614,7 @@ window.WW_TR = {"en":{"Die künstliche Strecke in Pau am Fuss der Pyrenäen war 
 'use strict';
 const $ = id => document.getElementById(id);
 // shown in the menu and sent to the others: the same number on every phone means the same game
-const GAME_VERSION = 42, GAME_DATE = '05.11.2026';
+const GAME_VERSION = 43, GAME_DATE = '06.11.2026';
 const clamp = (v, a, b) => Math.max(a, Math.min(b, v));
 const REDUCED = matchMedia('(prefers-reduced-motion: reduce)').matches;
 
@@ -8875,7 +8875,7 @@ function moveTeammate(b, dt, go) {
   const ps = b.slot - 1, pb = ps >= 1 && ps !== nightPos ? slotBoat(ps) : null;
   const pred = ps < 1 ? null : ps === nightPos ? { s: me, lat: myLat, v: night.myV } : pb ? { s: -pb.z, lat: pb.x - cx(-pb.z), v: pb.vs } : null;
   const ns = b.slot + 1, nb = ns <= 3 && ns !== nightPos ? slotBoat(ns) : null, behind = ns > 3 ? null : ns === nightPos ? me : nb ? -nb.z : null;
-  const cruise = flowSpeed(s, lat) * 0.72 + 1.6 * b.skill, back = night.passed && b.slot === nightPos - 1;
+  const cruise = flowSpeed(s, lat) * 0.95 + 2.9 * b.skill, back = night.passed && b.slot === nightPos - 1;   // about as fast as you paddle
   const started = state === 'racing' || state === 'finished' || me > night.startMe + 0.8;
   let vg = 0;
   if (go && started) {
@@ -8883,6 +8883,9 @@ function moveTeammate(b, dt, go) {
     const wait = behind === null ? 1 : clamp(1.25 - (s - behind - NGAP) / 8, 0, 1.25);
     if (!pred) vg = cruise * wait;
     else { const d = pred.s - s; vg = d < 3.4 ? 0 : clamp(pred.v + (d - NGAP) * 0.8, 0, cruise * 2); if (ns === nightPos) vg = Math.min(vg, cruise * wait); }
+    // pressed from behind (by you or the boat behind): at least as fast as that boat, a little more
+    const behindV = ns === nightPos ? night.myV : nb ? nb.vs : 0;
+    if (behind !== null && s - behind < NGAP + 1.5) vg = Math.max(vg, Math.min(behindV * 1.08 + 0.3, cruise * 1.8));
     if (back) vg = Math.max(vg, cruise * 1.35);   // you overtook it: it takes its place back
     if (holeAt(s, lat) > 0.3) vg *= 0.6;
     if (s > FINISH_S + 6) vg *= Math.max(0, 1 - (s - FINISH_S - 6) / 10);
