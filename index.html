@@ -1624,7 +1624,7 @@ window.WW_TR = {"en":{"Die künstliche Strecke in Pau am Fuss der Pyrenäen war 
 'use strict';
 const $ = id => document.getElementById(id);
 // shown in the menu and sent to the others: the same number on every phone means the same game
-const GAME_VERSION = 45, GAME_DATE = '06.11.2026';
+const GAME_VERSION = 46, GAME_DATE = '06.11.2026';
 const clamp = (v, a, b) => Math.max(a, Math.min(b, v));
 const REDUCED = matchMedia('(prefers-reduced-motion: reduce)').matches;
 
@@ -4141,8 +4141,15 @@ function planPaths() {
     }
     if (pts.length >= 12 && !falls.some(f => Math.abs(f.s - s0) < 12)) creeks.push({ side, pts });
   }
-  // a plank bridge where a trail crosses a creek
-  for (const c of creeks) for (const [s, d, w] of c.pts) if (onTrail(s, d, c.side, 0.8)) { c.bridge = { s, d, w }; walkDecks.push({ side: c.side, s0: s - w / 2 - 0.9, s1: s + w / 2 + 0.9, d0: d - 0.9, d1: d + 0.9, y: bankSurfaceH(s, d, c.side) + 0.32 }); break; }
+  // a plank bridge exactly where a trail crosses a creek: between two creek points the creek changes sides of the trail's line
+  for (const c of creeks) for (let i = 1; i < c.pts.length; i++) {
+    const [sa, da, wa] = c.pts[i - 1], [sb, db, wb] = c.pts[i], fa = da - trailD(c.side, sa), fb = db - trailD(c.side, sb);
+    if (fa * fb > 0 || fa === fb) continue;
+    const t = fa / (fa - fb), s = sa + (sb - sa) * t, w = wa + (wb - wa) * t, d = trailD(c.side, s);
+    if (!onTrail(s, d, c.side, 0)) continue;   // the trail has a gap there
+    c.bridge = { s, d, w }; walkDecks.push({ side: c.side, s0: s - w / 2 - 0.9, s1: s + w / 2 + 0.9, d0: d - 0.9, d1: d + 0.9, y: bankSurfaceH(s, d, c.side) + 0.32 });
+    break;
+  }
   // the footbridge over the river
   if (!OWN_BRIDGE.includes(RV.lm) && RV.lm !== 'nacht') {
     const sb = freeS(FINISH_S * 0.56), h = hw(sb), L0 = h + 3, L1 = h + 9, y = Math.max(level(sb) + 3.1, bankSurfaceH(sb, 3, -1) + 0.25, bankSurfaceH(sb, 3, 1) + 0.25);
@@ -4197,9 +4204,20 @@ function buildPaths() {
     const g = new THREE.BufferGeometry(); g.setAttribute('position', new THREE.Float32BufferAttribute(pos, 3)); g.setAttribute('uv', new THREE.Float32BufferAttribute(uv, 2)); g.setIndex(idx); g.computeVertexNormals();
     const m = new THREE.Mesh(g, mat); m.frustumCulled = false; world.add(m); return m;
   };
-  for (const t of trails) for (const [a, b] of t.segs) {
-    const pts = []; for (let s = a; s <= b; s += 1) pts.push({ s, d: trailD(t.side, s), side: t.side, w: 0.75, along: 's' });
-    ribbon2(pts, pathM, 0.06);
+  // the trail stops at each plank bridge and goes on after it: the creek runs under the planks, not over the path
+  for (const t of trails) {
+    const cuts = walkDecks.filter(k => !k.river && k.side === t.side).map(k => [k.s0 + 0.3, k.s1 - 0.3]), P0 = s => ({ s, d: trailD(t.side, s), side: t.side, w: 0.75, along: 's' });
+    for (const [a, b] of t.segs) {
+      let pts = [];
+      const flush = () => { if (pts.length > 1) ribbon2(pts, pathM, 0.06); pts = []; };
+      for (let s = a; s <= b; s += 1) {
+        const cut = cuts.find(([c0, c1]) => s > c0 && s < c1);
+        if (cut) { if (pts.length) { pts.push(P0(cut[0])); flush(); } continue; }
+        if (!pts.length) { const prev = cuts.find(([c0, c1]) => s > c1 && s - 1 < c1 && c1 > a); if (prev) pts.push(P0(prev[1])); }
+        pts.push(P0(s));
+      }
+      flush();
+    }
   }
   if (creeks.length) {
     const waterM = new THREE.MeshPhongMaterial({ color: 0x3f7c84, shininess: 90, specular: 0x8899aa, side: THREE.DoubleSide }), foamM = new THREE.MeshLambertMaterial({ color: 0xdfeceb, side: THREE.DoubleSide });
