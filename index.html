@@ -1708,7 +1708,7 @@ window.WW_TR = {"en":{"Die künstliche Strecke in Pau am Fuss der Pyrenäen war 
 'use strict';
 const $ = id => document.getElementById(id);
 // shown in the menu and sent to the others: the same number on every phone means the same game
-const GAME_VERSION = 54, GAME_DATE = '07.11.2026';
+const GAME_VERSION = 55, GAME_DATE = '07.11.2026';
 const clamp = (v, a, b) => Math.max(a, Math.min(b, v));
 const REDUCED = matchMedia('(prefers-reduced-motion: reduce)').matches;
 
@@ -2659,27 +2659,132 @@ function staticH(s, lat) {
   }
   return y;
 }
-function staticFoam(s, lat, x, z) {
-  let f = 0;
-  for (const r of rocks) {
-    if (Math.abs(r.s - s) > 5) continue;
-    f = Math.max(f, 1 - ss(0, 1.4, Math.hypot(x - r.x, (z - r.z) * 0.55) - r.r));
+// White water as it is drawn (nothing in the boat's physics reads it), into _ww: [0] pile = churning foam (a hole's
+// backwash, a fall's or a step's foot, a rock's pillow, a breaking crest), [1] trail = foam drifting away from them, along
+// eddy lines and caught in eddies, [2] air in the water (milky, the bed hidden), [3] glassy = smooth water (the tongue
+// sliding into a drop, a lip, a wave's green face, the lee behind a rock)
+const _ww = [0, 0, 0, 0];
+let wwRocks = null, wwRockSp = [];   // how fast the current runs at each rock (0.35..1.3), worked out once per course
+function whiteWater(s, lat) {
+  let pile = 0, trail = 0, aer = 0, gl = 0;
+  if (wwRocks !== rocks || wwRockSp.length !== rocks.length) { wwRocks = rocks; wwRockSp = rocks.map(r => clamp(flowSpeed(r.s, r.lat) / 2.6, 0.35, 1.3)); }
+  for (const h of holes) {
+    if (s < h.s - 6 || s > h.s + 20) continue;
+    const ds = s - holeS0(h, lat), L = h.L || 2.6;
+    if (ds < -5 || ds > 18) continue;
+    const m0 = ss(h.l0 - 0.8, h.l0 + 0.8, lat) * ss(h.l1 + 0.8, h.l1 - 0.8, lat);
+    if (!m0) continue;
+    const le = holeLat(h, lat), gap = m0 - le, k = clamp(0.72 + 0.28 * h.k, 0.85, 1.12), n = vnoise(lat * 0.9 + h.s, ds * 0.4 + 7.7), n2 = vnoise(lat * 1.4 + h.s * 2.3, 2.2);
+    // the tongue: green water sliding smooth into the drop, and on through the gap of a hole with a tongue
+    gl = Math.max(gl, m0 * ss(-4.5, -1.6, ds) * ss(0.3, -0.1, ds), gap * ss(-4, -1.5, ds) * ss(L + 2.5, L, ds));
+    // the backwash: white and churning up to the drop; the boil line at its end, then a few metres of thin foam drifting
+    // away (no longer, or the hole would look bigger than it holds)
+    pile = Math.max(pile, le * k * ss(-0.7, 0.4, ds) * ss(L + 0.2 + 0.7 * n, L - 1.1, ds) * (0.72 + 0.4 * n2));
+    trail = Math.max(trail, (le + gap * 0.3) * ss(L - 1.5, L - 0.2, ds) * Math.exp(-Math.max(0, ds - L) / (2.2 + 1.4 * n)) * (0.36 + 0.22 * n));
+    aer = Math.max(aer, m0 * ss(-0.5, 0.4, ds) * Math.exp(-Math.max(0, ds - L) / 9));
   }
-  for (const h of holes) { if (s < h.s - 2.9 || s > h.s + 5.8) continue; const ds = s - holeS0(h, lat), L = h.L || 2.6; if (ds > -1 && ds < L + 1.4) f = Math.max(f, holeLat(h, lat) * ss(-0.6, 0.3, ds) * ss(L + 0.8, L - 0.3, ds)); }
-  for (const w of falls) { const ds = s - w.s; if (ds > -1 && ds < 7) f = Math.max(f, ss(-0.6, 0.3, ds) * ss(6.5, 2.5, ds)); }
-  for (const t of steps) { const ds = s - t.s; if (ds > -0.5 && ds < t.L + 5) f = Math.max(f, ss(-0.5, t.L * 0.5, ds) * ss(t.L + 5, t.L + 1, ds) * (0.55 + 0.4 * t.drop)); }   // white water down a step and in its pool
+  for (const f of falls) {
+    const ds = s - f.s;
+    if (ds < -7 || ds > 32) continue;
+    const n = vnoise(lat * 0.7 + f.s, ds * 0.3 + 3.1);   // the curtain is not the same all across
+    gl = Math.max(gl, ss(-6.5, -1.8, ds) * ss(0.25, -0.05, ds));   // the smooth lip
+    // the curtain, white as the water falls, and the plunge at its foot; then foam drifting off across the pool
+    pile = Math.max(pile, ss(-0.05, 0.9, ds) * ss(4.8 + 1.8 * n, 2.6 + n, ds) * (0.85 + 0.2 * n));
+    trail = Math.max(trail, ss(2, 4.5, ds) * Math.exp(-Math.max(0, ds - 4.5) / 9) * (0.6 + 0.35 * n));
+    aer = Math.max(aer, ss(0, 0.8, ds) * Math.exp(-Math.max(0, ds - 4) / 12));
+  }
+  for (const t of steps) {
+    const ds = s - t.s, L = t.L;
+    if (ds < -4 || ds > L + 26) continue;
+    // a step pours between boulders: green tongues where it runs deep, white where it breaks over stones; white water at
+    // its foot, the pool below milky and flecked with foam
+    const n = vnoise(lat * 0.45 + t.s * 0.37, 3.3), tg = ss(0.6, 0.32, n), w = 0.55 + 0.45 * t.drop;
+    gl = Math.max(gl, ss(-3, -0.8, ds) * ss(L * (0.5 + 0.35 * tg), L * 0.2, ds));
+    pile = Math.max(pile, ss(L * (0.3 + 0.35 * tg), L * (0.62 + 0.3 * tg), ds) * ss(L + 2.4, L + 0.6, ds) * w * (1 - 0.4 * tg) * 1.2);
+    trail = Math.max(trail, ss(L * 0.7, L + 0.8, ds) * Math.exp(-Math.max(0, ds - L - 0.8) / 5.5) * (0.32 + 0.4 * t.drop) * (1 - 0.35 * tg));   // less below a tongue
+    aer = Math.max(aer, ss(L * 0.4, L * 0.9, ds) * Math.exp(-Math.max(0, ds - L) / 8) * (0.6 + 0.4 * t.drop));
+  }
   for (const w of waveTrains) {
-    if (w.surf) { if (s > w.s && s < w.s + w.L) f = Math.max(f, surfEnvLat(w, lat) * ss(0.55, 0.95, surfProfile(w, s))); continue; }
-    const e = waveEnv(w, s, lat); if (e) f = Math.max(f, e * 0.95 * ss(0.3, 0.95, Math.sin(2 * Math.PI * (s - w.s) / w.lam)));
+    if (s < w.s - 1 || s > w.s + w.L + 14) continue;
+    if (w.surf) {
+      // a surf wave: a smooth green face, a foam pile breaking on its crest, foam drifting off below
+      const env = surfEnvLat(w, lat); if (!env) continue;
+      const x = (s - w.s) / w.lam, pr = surfProfile(w, s + 0.3), n = vnoise(lat * 0.8 + w.s, 1.9);
+      pile = Math.max(pile, env * ss(0.66, 0.95, pr) * (0.75 + 0.3 * n));
+      gl = Math.max(gl, env * ss(0.35, 0.55, x) * ss(0.78, 0.66, x) * 0.8);
+      trail = Math.max(trail, env * ss(0.85, 1.0, x) * Math.exp(-Math.max(0, x - 1.0) * w.lam / 6) * 0.7);
+      aer = Math.max(aer, env * ss(0.7, 0.9, x) * Math.exp(-Math.max(0, x - 1.0) * w.lam / 8));
+      continue;
+    }
+    // standing waves: green faces, white where a crest breaks (bigger waves break more, haystacks in lumps), the foam
+    // tumbling back onto the face just upstream of the crest; foam drifts on through the train and beyond it
+    const e = waveEnv(w, s, lat), ph = (s - w.s) / w.lam, br = ss(0.25, 0.75, w.A * Math.max(e, 0.3));
+    if (e) {
+      const sn = Math.sin(2 * Math.PI * (ph + 0.035)), n = vnoise(lat * 0.85 + w.s * 3.1, ph * 1.7);
+      pile = Math.max(pile, e * br * ss(0.6 + 0.2 * n, 0.95, sn) * (0.5 + 0.65 * n));
+      trail = Math.max(trail, e * (0.12 + 0.4 * br) * (0.7 + 0.3 * n));
+      gl = Math.max(gl, e * 0.5 * ss(0.4, -0.4, sn));
+      aer = Math.max(aer, e * br * 0.55);
+    }
+    const de = s - (w.s + w.L);
+    if (de > 0) trail = Math.max(trail, ss(w.l0, w.l0 + 1.5, lat) * ss(w.l1, w.l1 - 1.5, lat) * br * 0.45 * Math.exp(-de / 5));
+  }
+  for (let i = 0; i < rocks.length; i++) {
+    const r = rocks[i], ds = s - r.s, dl = lat - r.lat, R = r.r;
+    if (ds < -R - 2.5 || ds > R * 4 + 12 || Math.abs(dl) > R + 3) continue;
+    // the current piles up white against a rock's upstream face (its pillow), tears past both sides into foam lines
+    // that close behind it round the calm dark V of its eddy, and drifts on beyond the V's tip
+    const d = Math.hypot(dl, ds) - R, sp = wwRockSp[i], len = R * 4 + 2, t = (ds - R * 0.4) / len;
+    pile = Math.max(pile, ss(0.7 + 1.0 * sp, -0.2, d) * ss(0.6 * R, -0.2 * R, ds) * (0.5 + 0.5 * sp));
+    trail = Math.max(trail, ss(1.0 + 0.8 * sp, 0, d) * ss(R * 0.9, -0.3 * R, ds) * sp * 0.5);
+    aer = Math.max(aer, ss(1.1 + 0.8 * sp, 0, d) * ss(R, -0.2 * R, ds) * sp);
+    if (ds > -0.3 * R) {
+      const wv = R * (1 - 0.6 * clamp(t, 0, 1)) + 0.1;
+      trail = Math.max(trail, ss(0.55, 0.06, Math.abs(Math.abs(dl) - wv)) * ss(1.2, 0.7, t) * sp * 0.55);
+      if (t > 0.6) trail = Math.max(trail, ss(R * 0.9 + 0.3, 0, Math.abs(dl)) * Math.exp(-Math.max(0, t - 0.9) * len / 5) * ss(0.6, 0.9, t) * sp * 0.42);
+      const re = ss(len, R, ds) * ss(wv + 0.2, wv - 0.5, Math.abs(dl)) * ss(R * 0.3, R * 0.6, ds);
+      gl = Math.max(gl, re * 0.75); trail = Math.max(trail, re * 0.16);   // a few flecks turn in the V
+    }
+  }
+  // eddies: flecks along the eddy line (the shader draws the line itself as a band), a little foam gathering where the
+  // eddy turns back at its top
+  for (const e of eddies) {
+    const t = (s - e.s) / e.L;
+    if (t <= -0.05 || t >= 1) continue;
+    const w = e.W * Math.min(1, Math.max(0, t) / 0.15 + 0.35) * (1 - ss(0.72, 1, t)), m = ss(w + 0.7, w - 0.7, hw(s) - e.side * lat);
+    if (!m) continue;
+    trail = Math.max(trail, m * (1 - m) * 1.8, m * (0.04 + 0.2 * ss(0.35, 0.05, t)) * (0.5 + 0.8 * vnoise(lat * 0.6, s * 0.3)));
   }
   for (const is of islands) {
     const ds = s - is.s;
-    if (Math.abs(ds) > is.a + 3) continue;
-    const q = Math.hypot(ds / is.a, (lat - is.lat) / is.b);
-    f = Math.max(f, (1 - ss(1.0, 1.3, q)) * (ds < 0 ? 1 : 0.55));
+    if (Math.abs(ds) > is.a + 12) continue;
+    const q = Math.hypot(ds / is.a, (lat - is.lat) / is.b), rim = 1 - ss(1.0, 1.35, q);
+    pile = Math.max(pile, rim * ss(0.1 * is.a, -0.6 * is.a, ds));
+    trail = Math.max(trail, rim * 0.55, ds > is.a ? ss(is.b * 1.2, 0, Math.abs(lat - is.lat)) * Math.exp(-(ds - is.a) / 5) * 0.5 : 0);
   }
-  const e = Math.max(eddyMask(s, lat), rockEddy(s, lat) * 0.7);
-  return Math.max(f, e * (1 - e) * 2.2);
+  // the heads of the groynes at Hüningen: a pillow upstream, foam lines past them
+  for (const sp of hunSpurs) {
+    const ds = s - sp.s; if (ds < -4 || ds > 10) continue;   // (before hw: there are many groynes)
+    const hl = sp.side * (hw(sp.s) - sp.len), dl = lat - hl;
+    if (Math.abs(dl) > 4) continue;
+    const d = Math.hypot(dl, ds) - Math.min(1, sp.w / 2);
+    pile = Math.max(pile, ss(0.7, 0, d) * ss(0.6, -0.4, ds) * 0.8);
+    trail = Math.max(trail, ss(0.6, 0.05, Math.abs(dl + sp.side * 0.9)) * ss(-0.5, 0.5, ds) * Math.exp(-Math.max(0, ds) / 4) * 0.6);
+  }
+  _ww[0] = Math.min(pile, 1); _ww[1] = Math.min(trail, 1); _ww[2] = Math.min(Math.max(aer, pile * 0.8), 1); _ww[3] = Math.min(gl * (1 - pile), 1);
+  return _ww;
+}
+// how much foam lies at (s, lat), 0..1
+function staticFoam(s, lat) { const w = whiteWater(s, lat); return Math.max(w[0], w[1]); }
+// 1 on the face of a waterfall or a pourover, where the water drops (drawn as falling strands)
+function fallFace(s, lat) {
+  let f = 0;
+  for (const w of falls) { const ds = s - w.s; if (ds > -0.6 && ds < 2.2) f = Math.max(f, ss(-0.3, 0.2, ds) * ss(1.9, 1.3, ds)); }
+  for (const h of holes) {
+    if (h.t !== 'pour' || s < h.s - 2 || s > h.s + 2) continue;
+    const ds = s - holeS0(h, lat); f = Math.max(f, holeLat(h, lat) * ss(-0.75, -0.3, ds) * ss(0.45, 0.1, ds));
+  }
+  return f;
 }
 
 // ================= Renderer & scene =================
@@ -3220,6 +3325,146 @@ const nightHook = sh => {
   sh.fragmentShader = sh.fragmentShader.replace('#include <common>', '#include <common>\nvarying vec3 vNW;\n' + NIGHT_GLSL)
     .replace('#include <fog_fragment>', 'gl_FragColor.rgb *= nightLight(vNW);\n  #include <fog_fragment>');
 };
+// A texture made in slices once the game runs, so start-up does not wait for it: it starts flat (fill), then bake() runs
+// its maker (a generator) a few milliseconds at a time, by timer so a slow frame rate does not hold it up
+const bakes = [];
+function bakedTex(N, fill, make) {
+  const data = new Uint8Array(N * N * 4);
+  for (let i = 0; i < data.length; i += 4) data.set(fill, i);
+  const t = new THREE.DataTexture(data, N, N, THREE.RGBAFormat);
+  t.wrapS = t.wrapT = THREE.RepeatWrapping; t.magFilter = THREE.LinearFilter; t.minFilter = THREE.LinearMipmapLinearFilter; t.generateMipmaps = true;
+  t.needsUpdate = true;
+  bakes.push(make(data, t));
+  return t;
+}
+function bake() {
+  const t0 = performance.now();
+  while (bakes.length && performance.now() - t0 < 6) if (bakes[0].next().done) bakes.shift();
+  if (bakes.length) setTimeout(bake, 0);
+}
+// The water's ripples come from one 256 px texture that repeats, baked once, instead of hash noise per pixel:
+// r, g = the slope of a rippled height field across and along (0.5 = level), b = its height (mean 0.5, spread 0.12),
+// a = one octave of value noise, 32 cells a tile (foam, bubbles, caustics). Mipmaps calm it far off.
+function tilePerlin(p, o) {   // gradient noise (x, y >= 0) that repeats every p cells, about -0.7..0.7; one table of gradients
+  const gx = new Float32Array(p * p), gy = new Float32Array(p * p);
+  for (let a = 0; a < p; a++) for (let b = 0; b < p; b++) { const h = hash2(a + o, b - o) * 6.2832; gx[a * p + b] = Math.cos(h); gy[a * p + b] = Math.sin(h); }
+  return (x, y) => {
+    const xi = Math.floor(x), yi = Math.floor(y), xf = x - xi, yf = y - yi, x0 = xi % p, y0 = yi % p, x1 = (x0 + 1) % p, y1 = (y0 + 1) % p;
+    const gd = (a, b, dx, dy) => gx[a * p + b] * dx + gy[a * p + b] * dy;
+    const u = xf * xf * xf * (xf * (xf * 6 - 15) + 10), v = yf * yf * yf * (yf * (yf * 6 - 15) + 10);
+    const A = gd(x0, y0, xf, yf), B = gd(x1, y0, xf - 1, yf), C = gd(x0, y1, xf, yf - 1), D = gd(x1, y1, xf - 1, yf - 1);
+    return A + (B - A) * u + (C - A) * v + (A - B - C + D) * u * v;
+  };
+}
+let WATER_G = 1;   // the steepest slope the texture holds (height 0..1 per tile)
+// (no anisotropic filtering: it would cost up to four lookups a sample, and far off the ripples should blur to a mirror)
+const waterTex = shared(bakedTex(256, [128, 128, 128, 128], function* (out, t) {
+  const N = 256, H = new Float32Array(N * N), gx = new Float32Array(N * N), gy = new Float32Array(N * N);
+  let m = 0, m2 = 0;
+  // rounded swell and ripples, and small sharp crests on top (ridged)
+  const oct = [[4, 1], [8, 0.5], [16, 0.27], [32, 0.14]].map(([p, a]) => [tilePerlin(p, p * 1.37), p, a]);
+  const rid = [[12, 0.2], [24, 0.11]].map(([p, a]) => [tilePerlin(p, p * 2.11), p, a]);
+  for (let y = 0; y < N; y++) for (let x = 0; x < N; x++) {
+    const u = x / N, v = y / N;
+    let h = 0;
+    for (const [f, p, a] of oct) h += a * f(u * p, v * p);
+    for (const [f, p, a] of rid) h += a * (0.3 - Math.abs(f(u * p, v * p)));
+    H[y * N + x] = h; m += h; m2 += h * h;
+    if (x === N - 1 && y % 8 === 7) yield;
+  }
+  m /= N * N; const sd = Math.sqrt(m2 / (N * N) - m * m), k = 0.12 / sd;
+  const mags = new Float32Array(N * N);
+  for (let y = 0; y < N; y++) for (let x = 0; x < N; x++) {
+    const i = y * N + x;
+    gx[i] = (H[y * N + (x + 1) % N] - H[y * N + (x + N - 1) % N]) * k * N / 2;
+    gy[i] = (H[((y + 1) % N) * N + x] - H[((y + N - 1) % N) * N + x]) * k * N / 2;
+    mags[i] = Math.max(Math.abs(gx[i]), Math.abs(gy[i]));
+  }
+  mags.sort(); WATER_G = mags[Math.floor(N * N * 0.997)];
+  for (let y = 0; y < N; y++) for (let x = 0; x < N; x++) {
+    const i = y * N + x, o = i * 4;
+    out[o] = Math.round(127.5 + 127.5 * clamp(gx[i] / WATER_G, -1, 1)); out[o + 1] = Math.round(127.5 + 127.5 * clamp(gy[i] / WATER_G, -1, 1));
+    out[o + 2] = Math.round(255 * clamp(0.5 + (H[i] - m) * k, 0, 1)); out[o + 3] = Math.round(255 * tileNoise(x / N * 32, y / N * 32, 32));
+    if (x === N - 1 && y % 32 === 31) yield;
+  }
+  t.needsUpdate = true; waterMat.uniforms.uWG.value = WATER_G;
+}));
+// cellular noise that repeats every p cells: writes the distances to the nearest and the second nearest point (in cells)
+function tileCells(p, seed) {
+  const fx = new Float32Array(p * p), fy = new Float32Array(p * p);
+  for (let i = 0; i < p * p; i++) { fx[i] = hash2(i * 0.731 + seed, seed * 1.37 - i * 0.113); fy[i] = hash2(i * 1.913 - seed, seed * 0.71 + i * 0.377); }
+  return (x, y, out) => {
+    const xi = Math.floor(x), yi = Math.floor(y); let d1 = 9, d2 = 9;
+    for (let b = -1; b <= 1; b++) for (let a = -1; a <= 1; a++) {
+      const X = xi + a, Y = yi + b, k = (((Y % p) + p) % p) * p + (((X % p) + p) % p), dx = X + fx[k] - x, dy = Y + fy[k] - y, d = dx * dx + dy * dy;
+      if (d < d1) { d2 = d1; d1 = d; } else if (d < d2) d2 = d;
+    }
+    out[0] = Math.sqrt(d1); out[1] = Math.sqrt(d2);
+  };
+}
+// spread values evenly over 0..1 (by rank), so a threshold t leaves about t of them below it
+function equalize(v) {
+  let lo = Infinity, hi = -Infinity; for (const x of v) { if (x < lo) lo = x; if (x > hi) hi = x; }
+  const B = 4096, c = new Float32Array(B + 1), k = B / (hi - lo + 1e-9);
+  for (const x of v) c[Math.floor((x - lo) * k)]++;
+  for (let i = 1; i <= B; i++) c[i] += c[i - 1];
+  return v.map(x => { const f = (x - lo) * k, i = Math.floor(f), c0 = i ? c[i - 1] : 0; return (c0 + (c[i] - c0) * (f - i)) / v.length; });
+}
+// The foam: one 128 px tile (3 m of water), baked once. r = its lace, spread evenly over 0..1: where foam lies first as
+// it thickens, so an amount a covers about a of the water (thin foam is a net of bubble walls, the walls of big cells
+// first, thick foam a sheet with round holes in it, not cracked glaze); g = the shading of its small bubbles (bright
+// domes, grey seams); b = fibres drawn out along v (falling water, smooth fast water); a = a finer lace for the foam near
+// by (high quality)
+const wwFoamTex = shared(bakedTex(128, [128, 180, 128, 128], function* (out, t) {
+  const N = 128, n = N * N, lace = new Float32Array(n), fine = new Float32Array(n), fib = new Float32Array(n), d = [0, 0];
+  const c1 = tileCells(6, 3.1), c2 = tileCells(13, 7.7), c3 = tileCells(27, 1.9), cb = tileCells(30, 9.4), cf = tileCells(11, 5.3);
+  const pb = tilePerlin(4, 23.9), pc = tilePerlin(8, 4.2);
+  const wall = (c, u, v, p, w) => { c(u * p, v * p, d); return 1 - ss(0, w, d[1] - d[0]); };
+  const cell = (c, u, v, p, w) => { c(u * p, v * p, d); return 0.6 * (1 - ss(0, w, d[1] - d[0])) + 0.4 * ss(0.05, 0.6, d[0]); };   // its walls, then its rim (a round hole in the middle)
+  // value noise that repeats every px cells across and py along
+  const vn2 = (x, y, px, py, o) => {
+    const xi = Math.floor(x), yi = Math.floor(y), xf = x - xi, yf = y - yi, u = xf * xf * (3 - 2 * xf), v = yf * yf * (3 - 2 * yf);
+    const h = (a, b) => hash2(((a % px) + px) % px + o, ((b % py) + py) % py - o), A = h(xi, yi), B = h(xi + 1, yi), C = h(xi, yi + 1), D = h(xi + 1, yi + 1);
+    return A + (B - A) * u + (C - A) * v + (A - B - C + D) * u * v;
+  };
+  for (let y = 0; y < N; y++) for (let x = 0; x < N; x++) {
+    const u = x / N, v = y / N, i = y * N + x, w2 = wall(c2, u, v, 13, 0.2);
+    lace[i] = cell(c1, u, v, 6, 0.24) * 0.5 + cell(c2, u, v, 13, 0.2) * 0.34 + wall(c3, u, v, 27, 0.18) * 0.2 + pb(u * 4, v * 4) * 0.45 + pc(u * 8, v * 8) * 0.2;
+    cb(u * 30, v * 30, d); out[i * 4 + 1] = Math.round(255 * clamp((0.3 + 0.7 * ss(1.0, 0.15, d[0] / Math.max(d[1], 1e-3))) * (1 - 0.35 * w2), 0, 1));
+    fine[i] = wall(cf, u, v, 11, 0.22) * 0.6 + wall(c3, u + 0.37, v + 0.61, 27, 0.2) * 0.3 + pc(u * 8, v * 8) * 0.5;
+    fib[i] = vn2(u * 40, v * 2, 40, 2, 1) + 0.6 * vn2(u * 90, v * 4, 90, 4, 2) + 0.5 * vn2(u * 16, v * 2, 16, 2, 3) - 0.55 * vn2(u * 9, v * 5, 9, 5, 4);
+    if (x === N - 1 && y % 8 === 7) yield;
+  }
+  const L = equalize(lace); yield;
+  const F = equalize(fine), S = equalize(fib);
+  for (let i = 0; i < n; i++) { out[i * 4] = Math.round(L[i] * 255); out[i * 4 + 2] = Math.round(S[i] * 255); out[i * 4 + 3] = Math.round(F[i] * 255); }
+  t.needsUpdate = true;
+}));
+// the water of each place: deep = its colour in deep water, scat = light through thin and bubbly water (crests, fast
+// runs), vis = how deep the bed still shows (m), abs = which colours it swallows first (red in clear water, blue in mud)
+const WATER_LOOK = {
+  alps: { deep: [0.05, 0.25, 0.24], scat: [0.26, 0.64, 0.58], vis: 1.4, abs: [1.7, 0.75, 0.75] },   // milky glacier water
+  voss: { deep: [0.015, 0.11, 0.1], scat: [0.14, 0.46, 0.38], vis: 2.6, abs: [1.6, 0.7, 0.8] },    // clear, dark over granite
+  sunkosi: { deep: [0.14, 0.24, 0.23], scat: [0.4, 0.5, 0.44], vis: 0.6, abs: [1.2, 0.9, 1.0] },   // grey glacier silt
+  canyon: { deep: [0.06, 0.22, 0.17], scat: [0.3, 0.54, 0.4], vis: 1.0, abs: [1.5, 0.8, 0.95] },  // the Colorado below the dam: cold jade green under the red rock
+  zambezi: { deep: [0.1, 0.12, 0.07], scat: [0.4, 0.4, 0.23], vis: 0.5, abs: [0.9, 1.0, 1.4] },    // brown-green
+  eiskanal: { deep: [0.03, 0.2, 0.19], scat: [0.22, 0.58, 0.52], vis: 1.3, abs: [1.7, 0.75, 0.75] },
+  ivrea: { deep: [0.08, 0.28, 0.28], scat: [0.34, 0.64, 0.6], vis: 1.0, abs: [1.6, 0.8, 0.8] },
+  ruinaulta: { deep: [0.05, 0.22, 0.22], scat: [0.3, 0.6, 0.54], vis: 1.1, abs: [1.6, 0.8, 0.8] },
+  huningue: { deep: [0.03, 0.17, 0.18], scat: [0.18, 0.52, 0.48], vis: 1.8, abs: [1.7, 0.75, 0.72] },   // the Rhine: clear, blue-green
+  pau: { deep: [0.04, 0.18, 0.17], scat: [0.24, 0.52, 0.44], vis: 1.4, abs: [1.6, 0.75, 0.8] },
+  club: { deep: [0.02, 0.12, 0.15], scat: [0.12, 0.42, 0.42], vis: 1.3, abs: [1.7, 0.75, 0.7] },   // a deep crater lake
+  nacht: { deep: [0.02, 0.07, 0.07], scat: [0.12, 0.3, 0.27], vis: 1.0, abs: [1.4, 0.8, 0.9] },     // a dark forest stream
+  vaires: { deep: [0.04, 0.18, 0.16], scat: [0.22, 0.48, 0.4], vis: 1.1, abs: [1.5, 0.8, 0.9] },
+  penrith: { deep: [0.05, 0.16, 0.13], scat: [0.26, 0.44, 0.32], vis: 1.0, abs: [1.3, 0.85, 1.0] },
+  reunion: { deep: [0.015, 0.14, 0.15], scat: [0.14, 0.5, 0.46], vis: 2.4, abs: [1.7, 0.7, 0.7] },  // clear over black basalt
+};
+// what each kind of bank shows in the water: the waterline up to x m, the woods or rock face set back by z m up to y m
+// (its top ragged by w)
+const BANK_REFL = {
+  alpine: [0.5, 16, 7, 0.35], cliffs: [0.8, 24, 2.5, 0.3], canyon: [0.8, 38, 6, 0.2], terraces: [0.6, 9, 4, 0.3],
+  channel: [1.0, 11, 9, 0.3], boulder: [0.9, 12, 7, 0.3], town: [2, 12, 6, 0.3],
+};
 const waterMat = new THREE.ShaderMaterial({
   side: THREE.DoubleSide, transparent: true,
   uniforms: {
@@ -3230,22 +3475,30 @@ const waterMat = new THREE.ShaderMaterial({
     uSw: { value: Array.from({ length: MAX_SW }, () => new THREE.Vector4(0, 1e5, 1, 0)) },
     uBo: { value: Array.from({ length: MAX_BO }, () => new THREE.Vector4(0, 1e5, 1, 0)) },
     uDetail: { value: 1 }, uSunCol: LOOK_U.uSunCol, uSunVis: LOOK_U.uSunVis, uRain: LOOK_U.uRain, uRefl: LOOK_U.uRefl,
+    // optics (set by waterLook): ripple texture and its slope scale, the bed, what the water swallows, caustics, the banks
+    tWN: { value: waterTex }, uWG: { value: WATER_G }, tBed: { value: null }, uBedCol: { value: new THREE.Vector3() }, uAbs: { value: new THREE.Vector3(1, 1, 1) },
+    uCaus: { value: 0 }, uBankLo: { value: new THREE.Vector3() }, uBankHi: { value: new THREE.Vector3() }, uBankLoS: { value: new THREE.Vector3() }, uBankHiS: { value: new THREE.Vector3() }, uBankH: { value: new THREE.Vector4(0.5, 16, 7, 0.3) },
+    uRound: { value: new THREE.Vector3() }, uWLit: { value: new THREE.Vector3(1, 1, 1) },
+    // white water: the foam's lace, and the light on a white surface from the sky and from the sun (set by waterLook)
+    tFoam: { value: wwFoamTex }, uFoamSky: { value: new THREE.Vector3(0.8, 0.8, 0.8) }, uFoamSun: { value: new THREE.Vector3(0.4, 0.4, 0.4) },
   },
   vertexShader: `
     uniform float uTime;
     uniform vec4 uSw[${MAX_SW}]; uniform vec4 uBo[${MAX_BO}];
-    attribute float aLat; attribute float aS; attribute float aFoam; attribute float aEddy; attribute float aSpd; attribute float aH;
-    varying float vLat; varying float vS; varying float vFoam; varying float vEddy; varying float vSpd; varying float vH; varying vec3 vWorld;
+    attribute float aLat; attribute float aS; attribute float aEddy; attribute float aSpd; attribute float aH; attribute vec2 aBed; attribute vec2 aSl; attribute vec4 aWW; attribute vec3 aVel;
+    varying float vLat; varying float vS; varying float vEddy; varying float vSpd; varying float vH; varying vec3 vWorld; varying vec2 vBed; varying vec2 vGS; varying vec4 vWW; varying vec3 vVel;
     void main() {
       vec3 p = position;
-      float w = 0.05 * sin(aS * 1.1 - uTime * 3.0 + aLat * 2.0) + 0.04 * sin(aS * 0.6 + aLat * 5.0 + uTime * 2.2);
-      w += 0.025 * sin(aS * 2.7 - uTime * (2.0 + aSpd) + aLat * 9.0);
-      w *= (1.0 - clamp((abs(aLat) - 0.85) / 0.2, 0.0, 1.0) * 0.6) * (1.0 - 0.75 * aEddy);
-      p.y += w + aFoam * 0.06 * sin(uTime * 9.0 + aS * 4.0 + aLat * 13.0);
+      float a1 = aS * 1.1 - uTime * 3.0 + aLat * 2.0, a2 = aS * 0.6 + aLat * 5.0 + uTime * 2.2, a3 = aS * 2.7 - uTime * (2.0 + aSpd) + aLat * 9.0;
+      float env = (1.0 - clamp((abs(aLat) - 0.85) / 0.2, 0.0, 1.0) * 0.6) * (1.0 - 0.75 * aEddy);
+      float w = (0.05 * sin(a1) + 0.04 * sin(a2) + 0.025 * sin(a3)) * env;
+      // the slope of the surface across and along (m per m): its standing shape (aSl) and these travelling waves
+      vGS = aSl + vec2((0.1 * cos(a1) + 0.2 * cos(a2) + 0.225 * cos(a3)) / max(aBed.y, 1.0), 0.055 * cos(a1) + 0.024 * cos(a2) + 0.0675 * cos(a3)) * env;
+      p.y += w + aWW.x * 0.07 * sin(uTime * 9.0 + aS * 4.0 + aLat * 13.0);   // churning water heaves
       // whirlpools pull the surface down in their middle, boils swell up into a dome
       for (int i = 0; i < ${MAX_SW}; i++) { vec2 d = p.xz - uSw[i].xy; float q = dot(d, d) / (uSw[i].z * uSw[i].z); p.y -= 0.07 * abs(uSw[i].w) * exp(-q * 2.0); }
       for (int i = 0; i < ${MAX_BO}; i++) { vec2 d = p.xz - uBo[i].xy; float q = dot(d, d) / (uBo[i].z * uBo[i].z); p.y += 0.16 * uBo[i].w * exp(-q); }
-      vLat = aLat; vS = aS; vFoam = aFoam; vEddy = aEddy; vSpd = aSpd; vH = aH + w;
+      vLat = aLat; vS = aS; vEddy = aEddy; vSpd = aSpd; vH = aH + w; vBed = vec2(aBed.x + w, aBed.y); vWW = aWW; vVel = aVel;
       vec4 wp = modelMatrix * vec4(p, 1.0);
       vWorld = wp.xyz;
       gl_Position = projectionMatrix * viewMatrix * wp;
@@ -3253,31 +3506,97 @@ const waterMat = new THREE.ShaderMaterial({
   fragmentShader: `
     uniform float uTime; uniform vec3 uCam; uniform vec3 uFog; uniform vec3 uZenith; uniform float uFogDensity; uniform vec3 uSun;
     uniform vec3 uDeep; uniform vec3 uShallow; uniform float uDetail; uniform vec3 uSunCol; uniform float uSunVis; uniform float uRain; uniform float uRefl;
+    uniform sampler2D tWN; uniform float uWG; uniform sampler2D tBed; uniform vec3 uBedCol; uniform vec3 uAbs; uniform float uCaus;
+    uniform vec3 uBankLo; uniform vec3 uBankHi; uniform vec3 uBankLoS; uniform vec3 uBankHiS; uniform vec4 uBankH; uniform vec3 uRound; uniform vec3 uWLit;
+    uniform sampler2D tFoam; uniform vec3 uFoamSky; uniform vec3 uFoamSun;
     ${NIGHT_GLSL}
     uniform vec4 uSw[${MAX_SW}]; uniform vec4 uBo[${MAX_BO}];
-    varying float vLat; varying float vS; varying float vFoam; varying float vEddy; varying float vSpd; varying float vH; varying vec3 vWorld;
+    varying float vLat; varying float vS; varying float vEddy; varying float vSpd; varying float vH; varying vec3 vWorld; varying vec2 vBed; varying vec2 vGS; varying vec4 vWW; varying vec3 vVel;
+    // hash: only for the rain drops (the surface, the foam and the boil rings use the texture)
     float hash(vec2 p) { return fract(sin(dot(p, vec2(127.1, 311.7))) * 43758.5453); }
-    float noise(vec2 p) {
-      vec2 i = floor(p), f = fract(p); f = f * f * (3.0 - 2.0 * f);
-      return mix(mix(hash(i), hash(i + vec2(1.0, 0.0)), f.x), mix(hash(i + vec2(0.0, 1.0)), hash(i + vec2(1.0, 1.0)), f.x), f.y);
-    }
-    float gDet = 1.0;   // fine ripples fade out with distance so they do not flicker
-    // surface ripples drift downstream at the speed of the water under them, stretched where it runs fast
-    float surf(vec2 p) {
-      float st = 1.0 + 0.22 * vSpd, sp = 0.25 + 0.38 * vSpd;
-      return noise(vec2(p.x * 0.9 * st, p.y * 0.35 / st - uTime * sp * 0.9)) * 0.5
-           + noise(vec2(p.x * 2.1 * st + 1.7, p.y * 0.9 / st - uTime * sp * 1.7)) * 0.28
-           + noise(vec2(p.x * 4.3, p.y * 2.2 - uTime * sp * 2.6)) * 0.14
-           + gDet * noise(vec2(p.x * 9.0 + 3.1, p.y * 5.0 - uTime * sp * 3.4)) * 0.08;
+    // one octave of value noise (0..1, one cell per unit, repeats every 32) from the texture
+    float wn(vec2 p) { return texture2D(tWN, p * 0.03125).a; }
+    // the ripple texture at uv: slope across and along (height 0..1 per tile), height
+    vec3 wtex(vec2 uv) { vec4 t = texture2D(tWN, uv); return vec3((t.rg * 2.0 - 1.0) * uWG, t.b); }
+    // the banks mirrored in the water: a reflected ray low enough meets the bank before the sky. The bank is two walls:
+    // the waterline (stones, a wall) up to uBankH.x, and set back by uBankH.z the woods or the rock face up to uBankH.y,
+    // its top ragged by uBankH.w; across the river from its edges, or all round a lake (uRound: centre x, z, radius).
+    // Each wall: its colour in the shade (uBankLo, uBankHi) and what the sun adds where it faces the sun (..S)
+    vec3 bankRefl(vec3 R, float soft, out float k) {
+      float ry = max(R.y, 0.0), tN, tF;
+      vec2 nW;   // which way the wall faces
+      if (uRound.z > 0.0) {
+        vec2 o = vWorld.xz - uRound.xy, d = R.xz;
+        float a = max(dot(d, d), 1e-4), b = dot(o, d), c = dot(o, o), rf = uRound.z + uBankH.z;
+        tN = (sqrt(max(b * b - a * (c - uRound.z * uRound.z), 0.0)) - b) / a;
+        tF = (sqrt(max(b * b - a * (c - rf * rf), 0.0)) - b) / a;
+        nW = -normalize(o + d * tF + 1e-4);
+      } else {
+        float sd = R.x < 0.0 ? -1.0 : 1.0, D = max(vBed.y * (1.0 - sd * vLat), 0.0), ax = max(abs(R.x), 1e-3);
+        tN = D / ax; tF = (D + uBankH.z) / ax;
+        nW = vec2(-sd, 0.0);
+      }
+      float sunW = max(dot(nW, uSun.xz), 0.0);
+      vec2 hit = vWorld.xz + R.xz * tF;
+      float top = uBankH.y * (1.0 + uBankH.w * (0.6 * sin(hit.x * 0.13 - hit.y * 0.11) + 0.3 * sin(hit.x * 0.41 + hit.y * 0.37 + 1.3) + 0.25 * abs(sin(hit.y * 1.3 - hit.x))));
+      // where the ray meets each wall, in its heights; soft edges: the ripples blur what a pixel mirrors
+      float hN = ry * tN / uBankH.x, hF = ry * tF / top;
+      float kN = smoothstep(1.0 + soft, 1.0 - soft, hN) * smoothstep(30.0, 12.0, tN * length(R.xz)), kF = smoothstep(1.0 + soft * 0.6, 1.0 - soft * 0.6, hF);   // the low waterline only near by
+      k = max(kN, kF);
+      vec3 c = mix((uBankHi + uBankHiS * sunW) * (0.7 + 0.45 * clamp(hF, 0.0, 1.0)), uBankLo + uBankLoS * sunW, kN);   // the woods darker at their foot
+      return mix(c, uFog, 1.0 - exp(-pow(uFogDensity * tF * length(R.xz), 2.0)));
     }
     void main() {
-      vec2 p = vec2(vWorld.x, vS);
+      vec2 p = vec2(vWorld.x, vS);   // across, downstream (m)
       float dist = length(uCam - vWorld), nearK = smoothstep(45.0, 6.0, dist);
-      gDet = uDetail * nearK;
-      float h0 = surf(p);
-      float e = 0.12, calm = 1.0 - 0.7 * vEddy;
-      float hx = surf(p + vec2(e, 0.0)), hs = surf(p + vec2(0.0, e));
-      vec3 N = normalize(vec3(-(hx - h0) / e * 0.32 * calm, 1.0, (hs - h0) / e * 0.32 * calm));
+      float spd = min(vSpd, 5.0), calm = 1.0 - 0.75 * vEddy;
+      // ---- surface: the tiled ripples slide downstream with the water. Two phases half a cycle apart, each fading in
+      // and out (and starting on a fresh patch), so the texture never stretches; a little long along the river, calm in
+      // eddies. (The stretch is the same everywhere: p is far from the origin, so a scale that changed with the speed
+      // would shift the lookup by whole tiles from one pixel to the next and draw swirls)
+      float vel = spd * (1.0 - vEddy) - 0.5 * vEddy, st = 1.3;
+      float ph = uTime * 0.6, c0 = fract(ph), c1 = fract(ph + 0.5), w0 = 1.0 - abs(2.0 * c0 - 1.0), w1 = 1.0 - w0;
+      float nw = inversesqrt(w0 * w0 + w1 * w1);   // keeps the contrast while the two phases blend
+      vec2 j0 = fract(floor(ph) * vec2(0.371, 0.613)), j1 = fract(floor(ph + 0.5) * vec2(0.587, 0.239));
+      float m0 = vel * 1.667 * (c0 - 0.5), m1 = vel * 1.667 * (c1 - 0.5);   // metres slid in each phase
+      vec2 sA = vec2(0.22, 0.22 / st);   // coarse ripples: a tile is 4.5 m across
+      vec3 A = wtex((p - vec2(0.0, m0)) * sA + j0) * w0 + wtex((p - vec2(0.0, m1)) * sA + j1) * w1;
+      vec2 g = A.xy * nw * sA * (0.06 + 0.05 * spd) * calm;
+      float hgt = 0.5 + (A.z - 0.5) * nw;   // ripple height 0..1 (mean 0.5), also for the foam
+      vec2 gB = vec2(0.0);
+      if (uDetail > 0.5 && dist < 60.0) {
+        // fine ripples at an angle to the coarse ones, a tile is 1.25 m; strongest near by, skipped far off (where the
+        // mipmaps have blurred them flat anyway)
+        float fk = smoothstep(60.0, 45.0, dist);
+        const mat2 RB = mat2(0.8, 0.6, -0.6, 0.8);
+        vec2 sB = vec2(0.8, 0.8 / (0.6 + 0.4 * st));
+        float q = ph * 1.37 + 0.25, d0 = fract(q), d1 = fract(q + 0.5), v0 = 1.0 - abs(2.0 * d0 - 1.0), v1 = 1.0 - v0;
+        float n0 = vel * 1.217 * (d0 - 0.5), n1 = vel * 1.217 * (d1 - 0.5);
+        vec3 B = wtex(RB * ((p - vec2(0.0, n0)) * sB) + j1.yx) * v0 + wtex(RB * ((p - vec2(0.0, n1)) * sB) + j0.yx) * v1;
+        gB = sB * (B.xy * RB) * inversesqrt(v0 * v0 + v1 * v1) * (0.02 + 0.012 * spd) * calm * (0.3 + 0.7 * nearK) * fk;
+        hgt += (B.z - 0.5) * 0.3 * fk;
+      }
+      g += gB;
+      g *= 1.0 - 0.6 * uRain;   // rain beats the ripples flat
+      // ---- the foam's lace (tFoam) drifts with the current (vVel: across, along; back upstream in a hole's backwash and in
+      // an eddy): two phases half a cycle apart as the ripples, on a short cycle and at a capped speed, so where the current
+      // changes fast (a boil line, an eddy line) the lace is sheared only a little before it fades out. Looked up for every
+      // pixel: inside a branch a lookup would lose its mip level
+      float fq = uTime * 0.8, e0 = fract(fq), e1 = fract(fq + 0.5), u0 = 1.0 - abs(2.0 * e0 - 1.0), u1 = 1.0 - u0, nf = inversesqrt(u0 * u0 + u1 * u1);
+      vec2 o0 = fract(floor(fq) * vec2(0.413, 0.677)), o1 = fract(floor(fq + 0.5) * vec2(0.731, 0.293));
+      vec2 fv = clamp(vVel.xy, vec2(-2.0, -2.5), vec2(2.0, 4.5)) * 1.25, fs = vec2(0.33, 0.14);   // a tile is 3 m across, 7 m along: foam streaks with the flow
+      vec2 q0 = (p - fv * (e0 - 0.5)) * fs + o0, q1 = (p - fv * (e1 - 0.5)) * fs + o1;
+      vec4 F0 = texture2D(tFoam, q0), F1 = texture2D(tFoam, q1);
+      float fD = 0.5 + (F0.r * u0 + F1.r * u1 - 0.5) * nf, fsh = F0.g * u0 + F1.g * u1, fib = 0.5 + (F0.b * u0 + F1.b * u1 - 0.5) * nf;
+      fD += (fsh - 0.5) * 0.3 * nearK;   // near by its edges fray into bubbles
+      if (uDetail > 1.5) fD += ((texture2D(tFoam, q0 * 2.7 + 0.31).a * u0 + texture2D(tFoam, q1 * 2.7 + 0.57).a * u1) - 0.5) * nf * 0.6 * nearK;   // and a finer lace
+      // smooth water (a tongue sliding into a drop, a lip, a wave's green face, a rock's lee) carries fewer ripples and
+      // shows the fibres of fast water drawn out along the flow
+      float glassy = vWW.w;
+      g *= 1.0 - 0.7 * glassy;
+      g.x += (fib - 0.5) * 0.12 * glassy;
+      // the normal: the standing and travelling waves (vGS) with the ripples on them; world z = -s
+      vec3 N = normalize(vec3(-(vGS.x + g.x), 1.0, vGS.y + g.y));
       // rain: a ring spreading round each drop, on two grids so they do not line up
       float rr = 0.0;
       if (uRain > 0.01 && nearK > 0.01) {
@@ -3287,7 +3606,7 @@ const waterMat = new THREE.ShaderMaterial({
           float h = hash(id + float(j) * 3.1), t = fract(uTime * (0.9 + 0.5 * h) + h * 7.0), r = length(f - o);
           float k = smoothstep(0.07, 0.0, abs(r - t * 0.45)) * (1.0 - t) * step(h, uRain);
           rr = max(rr, k);
-          N = normalize(N + vec3(f.x - o.x, 0.0, f.y - o.y) * k * 0.6 * nearK);
+          N = normalize(N + vec3(f.x - o.x, 0.0, f.y - o.y) * k * 1.2 * nearK);
         }
         rr *= nearK;
       }
@@ -3306,42 +3625,141 @@ const waterMat = new THREE.ShaderMaterial({
         vec2 d = vWorld.xz - uBo[i].xy; float r = length(d), R = uBo[i].z, k = uBo[i].w;
         if (r > R * 2.2 || k <= 0.01) continue;
         glass = max(glass, k * smoothstep(R * 1.1, R * 0.2, r));
-        ring = max(ring, k * smoothstep(0.35, 0.0, abs(r - R * (1.0 + 0.4 * k))) * (0.6 + 0.4 * noise(d * 5.0 + uTime)));
+        ring = max(ring, k * smoothstep(0.35, 0.0, abs(r - R * (1.0 + 0.4 * k))) * (0.6 + 0.4 * wn(d * 5.0 + uTime)));
         N = normalize(N + vec3(d.x, 0.0, d.y) * 0.35 * k * exp(-r * r / (R * R)) / R);
       }
       N = normalize(mix(N, vec3(0.0, 1.0, 0.0), glass * 0.7));
       vec3 V = normalize(uCam - vWorld);
-      float edge = smoothstep(0.78, 1.05, abs(vLat));
-      vec3 base = mix(uDeep, uShallow, edge * 0.9);
-      base = mix(base, uDeep * 0.85, vEddy * 0.6);
-      base *= 0.8 + 0.4 * h0;
-      base *= 1.0 - 0.3 * core;
-      // light shining through the thin water at the crest of a wave
-      base += vec3(0.05, 0.14, 0.11) * clamp(vH * 1.6, 0.0, 1.0) * (1.0 - vFoam);
+      float dep = max(vBed.x, 0.0);
+      // ---- white water. vWW: x = pile (churning foam: a hole's backwash, the foot of a fall or a step, a rock's pillow, a
+      // breaking crest), y = trail (foam drifting away from them, along eddy lines, caught in eddies), z = air in the water.
+      // The foam is the lace (fD): an amount a covers about a of the water, so thin foam breaks up into a net and flecks and
+      // thick foam is a sheet with holes; on the face of a fall it runs down in strands (the fibres)
+      float pile = vWW.x, steep = vVel.z * smoothstep(0.3, 1.0, -vGS.y);   // the face of a fall or a pourover (vVel.z)
+      float trail = vWW.y, eline = vEddy * (1.0 - vEddy) * 4.0;   // eline: 1 on an eddy line
+      trail = max(trail, smoothstep(0.3, 0.05, dep) * smoothstep(-0.02, 0.06, dep) * (0.12 + 0.25 * smoothstep(0.3, 2.0, spd)) * (1.0 - 0.7 * vEddy) * (1.0 - glassy));   // along the bank (little on still water)
+      trail = max(trail, smoothstep(0.7, 0.92, hgt) * smoothstep(1.8, 3.8, spd) * 0.16 * (1.0 - smoothstep(0.0, 0.3, vEddy)) * (1.0 - glassy));     // whitecaps on fast water, none by an eddy line
+      trail *= (1.0 - glass * 0.7) * (0.3 + 1.4 * hgt);   // thicker and thinner with the swell, so the tiles do not show
+      float soft = 0.12 + 0.2 * smoothstep(8.0, 70.0, dist);   // soft edges; far off the lace blurs, as its mipmaps do
+      // the pile churns: its threshold wobbles with the lace itself, so holes in it open and close
+      float boil = 0.12 * sin(uTime * 4.6 + fD * 9.0 + vS * 1.7 + vWorld.x * 0.9);
+      float cP = smoothstep(-soft, soft, fD - 1.0 + min(pile, 0.93) + boil * pile) * smoothstep(0.0, 0.1, pile);
+      float cT = smoothstep(-soft, soft, fD - 1.0 + trail) * smoothstep(0.0, 0.08, trail) * (0.45 + 0.5 * smoothstep(0.1, 0.6, trail));   // thin foam lets the water show
+      // the face of a fall: strands running down, green near the lip, whiter as the water falls
+      float foam = mix(max(cP, cT), smoothstep(0.3 - 0.35 * pile, 0.62 - 0.35 * pile, fib), steep);
+      // unbroken bands: the eddy line (a milky seam, flecked by the lace), whirlpool arms, the ring round a boil
+      foam = max(foam, smoothstep(0.55, 0.95, eline) * (0.35 + 0.35 * fD) * (1.0 - glassy));   // (not inside a rock's lee: vEddy < 0.8 there)
+      foam = max(foam, max(swirl * 1.25, ring * 0.8) * (0.85 + 0.3 * fD));
+      // ---- under the surface: the bed seen along the refracted view ray, its colours swallowed on the way down and up
+      // (red first in clear water), the rest the water's own colour. Air in the water (fast runs, below holes, falls and
+      // steps, under foam) makes it milky and hides the bed; smooth water runs clear
+      float aer = clamp(vWW.z + 0.5 * pile + max(spd - 1.2, 0.0) * 0.25, 0.0, 1.0) * (1.0 - 0.5 * glassy);
+      vec3 Tr = refract(-V, N, 0.75);
+      float path = dep / max(-Tr.y, 0.3);
+      vec2 bq = vWorld.xz + Tr.xz * path;
+      vec3 bed = texture2D(tBed, vec2(bq.x, -bq.y) * 0.12).rgb * uBedCol;
+      if (uDetail > 0.5 && uCaus > 0.01 && dist < 25.0 && dep < 1.2) {
+        // caustics: the ripples gather the sun into a moving net of light on a shallow bed; only near by (far off its
+        // blurred cells would only add grain and brighten the bed) and where the bed is near enough to show it
+        float k1 = wn(bq * 7.0 + vec2(0.4, 1.1) * uTime), k2 = wn(bq * 9.1 + vec2(-0.5, 0.8) * uTime + 11.0);
+        bed *= 1.0 + uCaus * pow(1.0 - abs(k1 - k2), 10.0) * 2.4 * smoothstep(1.2, 0.1, dep) * smoothstep(25.0, 6.0, dist);
+      }
+      vec3 trans = exp(-uAbs * (path + dep)) * (1.0 - 0.8 * aer);
+      // the water's own colour as the light of this sky gives it (uWLit), darker in deep pools and eddies
+      vec3 body = mix(uDeep, uShallow * 1.2, aer * 0.75) * uWLit * (1.0 - 0.35 * vEddy) * (1.0 - 0.3 * core);
+      body = mix(body, (uShallow * 0.6 + 0.3) * uWLit, aer * aer * 0.5);   // full of bubbles it turns pale, nearly white
+      vec3 under = mix(body, bed, trans) * (0.9 + 0.2 * hgt);
+      under = mix(under, uDeep * 0.85 * uWLit, vEddy * 0.6);   // an eddy: dark, deep and still
+      // light through the thin water of a crest or a wave face turned to us, strongest with the sun behind it
+      float face = clamp(vH * 1.3 + (hgt - 0.5) * 0.8 + max(dot(N.xz, V.xz), 0.0) * 1.5, 0.0, 1.0), back = clamp(dot(-normalize(V.xz + 1e-4), normalize(uSun.xz + 1e-4)), 0.0, 1.0);
+      under += uShallow * uWLit * face * (0.12 + 0.45 * back * back * uSunVis * (1.0 - uN)) * (1.0 - pile);
+      // ---- on the surface: the sky and the banks mirrored (Fresnel), the sun's glitter
       vec3 R = reflect(-V, N);
-      vec3 skyc = mix(mix(uFog, uZenith, uRefl), uZenith, pow(clamp(R.y, 0.0, 1.0), 0.6));
-      float fres = 0.03 + 0.97 * pow(1.0 - max(dot(N, V), 0.0), 5.0);
-      vec3 col = mix(base, skyc, clamp(fres, 0.0, 0.85));
-      float spec = pow(max(dot(R, uSun), 0.0), 220.0);
-      col += uSunCol * (spec * 1.8 + pow(max(dot(R, uSun), 0.0), 30.0) * 0.06) * (1.0 - uN) * (0.15 + 0.85 * uSunVis);   // no sun at night, little under cloud
-      float bub = 0.65 + 0.7 * noise(p * vec2(6.0, 3.0) - vec2(0.0, uTime * (0.6 + vSpd)));
-      float crest = smoothstep(0.7, 0.92, surf(p * vec2(1.3, 0.8) + vec2(7.0, 3.0))) * (1.0 - edge) * 0.4 * (1.0 - vEddy) * smoothstep(0.5, 2.5, vSpd) * (0.35 + 0.65 * nearK);
-      float shore = edge * smoothstep(0.5, 0.78, h0 + 0.2 * sin(vS * 0.9 - uTime * 4.0)) * 0.75;
-      float churn = vFoam * smoothstep(0.2, 0.6, h0 + 0.25 * sin(uTime * 6.0 + vS * 3.0)) * bub;
-      float solid = clamp((vFoam - 0.6) * 2.0, 0.0, 1.0) * (0.6 + 0.4 * h0);
-      float foam = max(max(crest, shore), max(churn, solid));
-      foam = max(foam, max(swirl, ring * 0.8)) * (1.0 - glass * 0.6);
+      float ry = clamp(R.y, 0.0, 1.0), bk;
+      vec3 skyc = mix(mix(uFog, uZenith, uRefl), uZenith, pow(ry, 0.6));
+      skyc += uSunCol * pow(max(dot(R, uSun), 0.0), 6.0) * 0.2 * (0.3 + 0.7 * uSunVis) * (1.0 - uN);
+      // the banks: the ripples smear their mirror image towards us and away (up and down the picture) but hardly
+      // sideways, else they would cut it into blotches; the farther, the softer
+      vec2 vh = normalize(V.xz + 1e-4), gw = vec2(g.x, -g.y), ga = dot(gw, vh) * vh;
+      gw = ga + 0.3 * (gw - ga);
+      vec3 bankc = bankRefl(reflect(-V, normalize(vec3(-(vGS.x + gw.x), 1.0, vGS.y - gw.y))), 0.2 + 0.25 * (1.0 - nearK), bk);
+      float fres = 0.02 + 0.98 * pow(1.0 - max(dot(N, V), 0.0), 5.0);
+      vec3 col = mix(under, mix(skyc, bankc, bk), clamp(fres, 0.0, 0.88));
+      col = mix(col, skyc * 1.15, rr * 0.4);   // a raindrop's ring catches the sky
+      // the sun's glitter: sparks on the finest facets near by; a path of glints that widens far off, where a pixel
+      // holds many ripples (rougher lobe, same energy); a soft sheen round the sun's mirror image
+      float far = smoothstep(6.0, 90.0, dist), sr = max(dot(R, uSun), 0.0), ng = mix(400.0, 60.0, far), spark = 0.0;
+      if (uDetail > 0.5 && uSunVis > 0.01) {
+        float sg = max(dot(reflect(-V, normalize(N + vec3(-gB.x, 0.0, gB.y) * 1.5)), uSun), 0.0);
+        spark = pow(sg, mix(900.0, 300.0, far)) * mix(4.0, 2.0, far) * uSunVis * uSunVis * (1.0 - uRain);
+      }
+      float sheen = (pow(sr, ng) * (ng + 8.0) * 0.006 + pow(sr, 24.0) * 0.07) * (0.15 + 0.85 * uSunVis) * (1.0 - 0.7 * uRain);   // little glitter in rain
+      col += uSunCol * (spark + sheen) * (1.0 - uN);
+      // night: the lamps glint in the water (not on low quality: four more lamps a pixel)
+      vec3 glint = vec3(0.0);
+      if (uN > 0.5 && uDetail > 0.5) {
+        for (int i = 0; i < 4; i++) {
+          vec3 L = uLP[i] - vWorld; float dl = max(length(L), 1e-3); L /= dl;
+          glint += vec3(1.0, 0.94, 0.82) * uLI[i] * smoothstep(uLK[i].x, uLK[i].y, dot(-L, uLD[i])) * pow(max(dot(R, L), 0.0), 60.0) * clamp(1.0 - dl / (uLK[i].z * 1.5), 0.0, 1.0);
+        }
+      }
+      // ---- the foam on top: white, lit as a white surface is (the sky, the sun on its slope), its bubbles shaded, thicker
+      // foam whiter; rain rings
+      // (a pile billows: the slopes of the coarse swell, steepened, catch the sun or turn away into the bluer sky light;
+      // with the sun behind it the thin foam glows); between the strands of a falling curtain the thin water shows green
+      vec2 gl2 = (g - gB) * (2.0 + 5.0 * pile);
+      vec3 Nf = normalize(vec3(-(vGS.x + gl2.x), 1.0 + 1.5 * steep, vGS.y + gl2.y));   // a falling curtain scatters light every way: lit as if half turned up
+      vec3 fcol = (uFoamSky * (0.72 + 0.28 * Nf.y) + uFoamSun * (max(dot(Nf, uSun), 0.0) + 0.3 * pow(max(dot(-V, uSun), 0.0), 3.0))) * (0.84 + 0.12 * fsh + 0.06 * fD) * (0.88 + 0.24 * hgt);
+      fcol /= 1.0 + 0.5 * max(fcol - 0.8, 0.0);   // in strong sun it rolls off gently, so its shading stays
       foam = max(foam, rr * 0.3);
-      col = mix(col, vec3(0.9, 0.94, 0.93), clamp(foam, 0.0, 1.0));
+      col = mix(mix(col, mix(uShallow * uWLit, fcol, 0.6), 0.45 * steep), fcol, clamp(foam, 0.0, 1.0));
       col *= nightLight(vWorld);
-      float d = length(uCam - vWorld);
-      float f = 1.0 - exp(-pow(uFogDensity * d, 2.0));
-      float alpha = mix(0.9, 0.5, smoothstep(0.5, 1.0, abs(vLat)) * (1.0 - vEddy * 0.5));
-      alpha = max(alpha, clamp(fres * 1.4, 0.0, 1.0));
+      col += glint * (1.0 - foam);
+      float f = 1.0 - exp(-pow(uFogDensity * dist, 2.0));
+      // see-through only where the water runs thin over the bed and the bank (the real ground shows there)
+      float alpha = smoothstep(0.0, 0.3, dep);
+      alpha = max(alpha, clamp(fres * 1.4, 0.0, 1.0) * smoothstep(0.0, 0.05, dep));
       alpha = max(alpha, clamp(foam * 1.2, 0.0, 1.0));
       gl_FragColor = vec4(mix(col, uFog, f), mix(alpha, 1.0, f));
     }`,
 });
+// the water's optics under this river's light: its colours, the bed it shows, the caustics and what its banks mirror
+// (called by applyLook, after the lights are set)
+function waterLook() {
+  const U = waterMat.uniforms, W = WATER_LOOK[RV.lm] || { deep: RV.deep, scat: RV.shallow, vis: 1.2, abs: [1.6, 0.8, 0.8] }, P = RV.pal, night = mode === 'night';
+  U.uDeep.value.set(...W.deep); U.uShallow.value.set(...W.scat);
+  U.uAbs.value.set(...W.abs).multiplyScalar(1 / W.vis);
+  U.tBed.value = gravelTex; U.uWG.value = WATER_G;
+  // light as the lit materials get it: on a level bed (sky and the sun at its height), on a steep bank (half sky, half
+  // ground, the sun from the side); at night the lamps light the water instead (nightLight), the banks stay black
+  const hs = hemiLight.color, hg = hemiLight.groundColor, hi = hemiLight.intensity, sc = sunLight.color, si = sunLight.intensity, el = Math.max(0, SUN_DIR.y);
+  const flat = night ? [0.9, 0.9, 0.9] : ['r', 'g', 'b'].map(c => hs[c] * hi + sc[c] * si * el);
+  const wall = ['r', 'g', 'b'].map(c => night ? 0.02 : (hs[c] * 0.5 + hg[c] * 0.5) * hi), wsun = ['r', 'g', 'b'].map(c => night ? 0 : sc[c] * si);
+  const unlit = night ? 0.02 : LK ? LK.unlit ?? 1 : 1, mul = (a, b, k) => a.map((v, i) => v * (b ? b[i] : 1) * k);
+  // the water's own colour is set for a clear day (sky and sun about 1.2): dimmer under cloud and at dusk, warm at sunset
+  U.uWLit.value.set(...(night ? [1, 1, 1] : flat.map(v => clamp(0.35 + 0.65 * v / 1.2, 0.3, 1.35))));
+  // foam is white and rough: lit like a lit white surface, the sky's part (a level surface) and the sun's (its slope),
+  // with part of the tint of the light (the colour grade tints the picture again); in shade never darker than about the
+  // self-lit scenery, so it still reads as foam
+  const lum = c => 0.3 * c[0] + 0.59 * c[1] + 0.11 * c[2], tint = (c, k, t) => { const l = Math.max(lum(c), 1e-3); return c.map(v => k * (1 - t + t * v / l)); };
+  const fSky = ['r', 'g', 'b'].map(c => hs[c] * hi * 0.8), fSun = ['r', 'g', 'b'].map(c => sc[c] * si * 0.8);
+  U.uFoamSky.value.set(...(night ? [0.95, 0.95, 0.95] : tint(fSky, Math.max(lum(fSky), 0.8 * unlit), 0.5)));
+  U.uFoamSun.value.set(...(night ? [0, 0, 0] : tint(fSun, lum(fSun) * 0.8, 0.35)));
+  // the gravel bed (as buildTerrain colours it), a little darker when wet
+  const cc = RV.style === 'channel' || RV.style === 'boulder', bed = cc ? [0.48, 0.47, 0.45] : [0.44, 0.4, 0.3];
+  U.uBedCol.value.set(...mul(bed, flat, 1.3 * (1 - 0.3 * (night ? 0 : (LK && LK.wx && LK.wx.wet) || 0))));
+  const st = RV.round ? 'alpine' : BANK_REFL[RV.style] ? RV.style : 'alpine', B = BANK_REFL[st];
+  U.uBankH.value.set(B[0], RV.round ? 14 : B[1], RV.round ? 10 : B[2], B[3]);   // round the lake: meadow, then the woods
+  // the waterline: wet stones, or concrete and boulders on a made course; then the woods (self-lit, as the trees are
+  // drawn), the rock face or the cliff; the sun's part is added in the shader where a wall faces it
+  const lo = cc ? P.rock : P.wet, rk = st === 'canyon' ? 0.9 : st === 'cliffs' ? 0.45 : 0;
+  U.uBankLo.value.set(...mul(lo, wall, 0.9)); U.uBankLoS.value.set(...mul(lo, wsun, 0.9));
+  const woods = mul(P.forest, null, 1.1 * unlit);
+  U.uBankHi.value.set(...woods.map((v, i) => v * (1 - rk) + P.rock[i] * wall[i] * 0.9 * rk)); U.uBankHiS.value.set(...mul(P.rock, wsun, 0.9 * rk));
+  if (RV.round) U.uRound.value.set(cx(RV.round.c), -RV.round.c, RV.round.R); else U.uRound.value.set(0, 0, 0);
+  // caustics only under a sun that shows and stands high enough
+  U.uCaus.value = night ? 0 : LOOK_U.uSunVis.value * clamp(el * 2.5, 0, 1) * Math.min(1, si);
+}
 // every few frames the nearest whirlpools and boils are handed to the water shader
 let swAcc = 1;
 function updateSwirlUniforms(dt) {
@@ -3351,9 +3769,10 @@ function updateSwirlUniforms(dt) {
   const sw = near(swirls, MAX_SW), bo = near(boils, MAX_BO);
   waterMat.uniforms.uSw.value.forEach((v, i) => { const w = sw[i] && sw[i][0]; if (w) v.set(w.x, w.z, w.R, w.G); else v.set(0, 1e5, 1, 0); });
   waterMat.uniforms.uBo.value.forEach((v, i) => { const b = bo[i] && bo[i][0]; if (b) v.set(b.x, b.z, b.R, b.k * Math.max(0, Math.sin(T * 6.283 / b.P + b.ph))); else v.set(0, 1e5, 1, 0); });
-  waterMat.uniforms.uDetail.value = lo ? 0 : 1;
+  waterMat.uniforms.uDetail.value = lo ? 0 : effQuality() === 'high' ? 2 : 1;   // 2: the finest foam lace too
 }
 shared(waterMat);
+let waterGeo = null;   // the river's surface (buildSideFalls adds the white water at the foot of each fall)
 function buildWater() {
   // fine rows along the course so holes, waves and rock foam keep their shape; coarse rows beyond
   const rows = [];
@@ -3362,14 +3781,47 @@ function buildWater() {
   for (let s = FINISH_S + 15; s <= FINISH_S + 320; s += 2) rows.push(s);
   if (RV.round) { rows.length = 0; for (let s = RV.round.c - RV.round.R; s <= RV.round.c + RV.round.R; s += 0.5) rows.push(s); }   // only the lake
   const NL = 40, NV = rows.length * (NL + 1);
-  const pos = new Float32Array(NV * 3), aLat = new Float32Array(NV), aS = new Float32Array(NV), aFoam = new Float32Array(NV), aEddy = new Float32Array(NV), aSpd = new Float32Array(NV), aH = new Float32Array(NV), idx = [];
+  const pos = new Float32Array(NV * 3), aLat = new Float32Array(NV), aS = new Float32Array(NV), aEddy = new Float32Array(NV), aSpd = new Float32Array(NV), aH = new Float32Array(NV), aBed = new Float32Array(NV * 2), idx = [];
+  const aWW = new Float32Array(NV * 4), aVel = new Float32Array(NV * 3);   // white water (whiteWater); the current across and along, and the face of a fall
   rows.forEach((s, i) => {
     const h = hw(s), c = cx(s);
     for (let j = 0; j <= NL; j++) {
       const ln = -1.3 + 2.6 * j / NL, lat = ln * h, k = i * (NL + 1) + j, x = c + lat, z = -s;
       pos[k * 3] = x; pos[k * 3 + 1] = level(s) + staticH(s, lat); pos[k * 3 + 2] = z;
-      aLat[k] = ln; aS[k] = s; aFoam[k] = staticFoam(s, lat, x, z); aEddy[k] = Math.max(eddyMask(s, lat), rockEddy(s, lat) * 0.8);
-      aSpd[k] = Math.max(0, flowAlong(s, lat)); aH[k] = staticH(s, lat);
+      aLat[k] = ln; aS[k] = s; aEddy[k] = Math.max(eddyMask(s, lat), rockEddy(s, lat) * 0.8);
+      const fa = flowAlong(s, lat), fd = flowDir(s), mv = microVec(x, z);
+      aSpd[k] = Math.max(0, fa); aH[k] = staticH(s, lat);
+      aWW.set(whiteWater(s, lat), k * 4); aVel[k * 3] = clamp(fd[0] * fa + mv[0], -7, 7); aVel[k * 3 + 1] = clamp(-(fd[1] * fa + mv[1]), -4, 9); aVel[k * 3 + 2] = fallFace(s, lat);
+      // how deep the water is over the bed or the bank under it (the optics see the ground through thin water), and the half width
+      const an = Math.abs(ln), dd = (an - 1) * h;
+      let gnd = an <= 1.08 ? bedY(s, ln) : -1e9;
+      if (dd >= -0.8) gnd = Math.max(gnd, bankSurfaceH(s, dd, ln < 0 ? -1 : 1));
+      aBed[k * 2] = pos[k * 3 + 1] - gnd; aBed[k * 2 + 1] = h;
+    }
+  });
+  // the foam drifts with the current smoothed a little (half a metre along, a metre across): where it changes fast (a
+  // hole's boil line, an eddy line, past a rock) the drawn foam would be torn into streaks; a hole's backwash keeps its
+  // drift upstream
+  const tmp = aVel.slice(), R = rows.length;
+  for (let pass = 0; pass < 2; pass++) {
+    const src = pass ? tmp : aVel, dst = pass ? aVel : tmp;
+    for (let i = 0; i < R; i++) for (let j = 0; j <= NL; j++) {
+      let x = 0, y = 0, c = 0;
+      for (let o = pass ? -2 : -1; o <= (pass ? 2 : 1); o++) {
+        const ii = pass ? i : Math.min(R - 1, Math.max(0, i + o)), jj = pass ? Math.min(NL, Math.max(0, j + o)) : j, k = ii * (NL + 1) + jj;
+        x += src[k * 3]; y += src[k * 3 + 1]; c++;
+      }
+      const k = i * (NL + 1) + j; dst[k * 3] = x / c; dst[k * 3 + 1] = y / c;
+    }
+  }
+  // the slope of the standing surface (waves, holes, steps) across and along, for the optics
+  const aSl = new Float32Array(NV * 2), Y = k => pos[k * 3 + 1];
+  rows.forEach((s, i) => {
+    const i0 = Math.max(0, i - 1), i1 = Math.min(rows.length - 1, i + 1), dl = 2.6 * hw(s) / NL;
+    for (let j = 0; j <= NL; j++) {
+      const k = i * (NL + 1) + j, j0 = Math.max(0, j - 1), j1 = Math.min(NL, j + 1);
+      aSl[k * 2] = clamp((Y(i * (NL + 1) + j1) - Y(i * (NL + 1) + j0)) / ((j1 - j0) * dl), -2, 2);
+      aSl[k * 2 + 1] = clamp((Y(i1 * (NL + 1) + j) - Y(i0 * (NL + 1) + j)) / Math.max(0.1, rows[i1] - rows[i0]), -2, 2);
     }
   });
   for (let i = 0; i < rows.length - 1; i++) for (let j = 0; j < NL; j++) { const a = i * (NL + 1) + j, b = a + NL + 1; idx.push(a, b, a + 1, b, b + 1, a + 1); }
@@ -3377,14 +3829,17 @@ function buildWater() {
   g.setAttribute('position', new THREE.BufferAttribute(pos, 3));
   g.setAttribute('aLat', new THREE.BufferAttribute(aLat, 1));
   g.setAttribute('aS', new THREE.BufferAttribute(aS, 1));
-  g.setAttribute('aFoam', new THREE.BufferAttribute(aFoam, 1));
+  g.setAttribute('aWW', new THREE.BufferAttribute(aWW, 4));
+  g.setAttribute('aVel', new THREE.BufferAttribute(aVel, 3));
   g.setAttribute('aEddy', new THREE.BufferAttribute(aEddy, 1));
   g.setAttribute('aSpd', new THREE.BufferAttribute(aSpd, 1));
   g.setAttribute('aH', new THREE.BufferAttribute(aH, 1));
+  g.setAttribute('aBed', new THREE.BufferAttribute(aBed, 2));
+  g.setAttribute('aSl', new THREE.BufferAttribute(aSl, 2));
   g.setIndex(idx);
   const water = new THREE.Mesh(g, waterMat);
   water.frustumCulled = false;
-  world.add(water);
+  world.add(water); waterGeo = g;
 }
 
 // ---------- banks: gravel shore, meadow, forest floor, rock faces ----------
@@ -3538,6 +3993,8 @@ function buildBank(side) {
   m.frustumCulled = false;
   world.add(m);
 }
+// the gravel river bed under the water at s, ln = lat / half width (buildTerrain draws it, the water looks down to it)
+function bedY(s, ln) { return level(s) - 0.3 - 1.15 * Math.max(0, 1 - ln * ln) + (vnoise(s * 0.3, ln * 3) - 0.5) * 0.25; }
 function buildTerrain() {
   buildBank(-1); buildBank(1);
   // the gravel river bed, seen through the clearer shallow water
@@ -3549,7 +4006,7 @@ function buildTerrain() {
     const h = hw(s), c = cx(s);
     for (let j = 0; j <= NL; j++) {
       const ln = -1.08 + 2.16 * j / NL, k = i * (NL + 1) + j, x = c + ln * h;
-      pos[k * 3] = x; pos[k * 3 + 1] = level(s) - 0.3 - 1.15 * Math.max(0, 1 - ln * ln) + (vnoise(s * 0.3, ln * 3) - 0.5) * 0.25; pos[k * 3 + 2] = -s;
+      pos[k * 3] = x; pos[k * 3 + 1] = bedY(s, ln); pos[k * 3 + 2] = -s;
       const n = 0.85 + vnoise(s * 0.2, ln * 4 + 7) * 0.3, cc = RV.style === 'channel' || RV.style === 'boulder';
       col[k * 3] = (cc ? 0.48 : 0.44) * n; col[k * 3 + 1] = (cc ? 0.47 : 0.4) * n; col[k * 3 + 2] = (cc ? 0.45 : 0.3) * n;
       uv[k * 2] = x * 0.12; uv[k * 2 + 1] = s * 0.12;
@@ -4287,25 +4744,29 @@ function updateFish(dt) {
 // ---------- side waterfalls tumbling down the cliffs, prayer flags over the river ----------
 const sideFallMat = shared(new THREE.ShaderMaterial({
   transparent: true, depthWrite: false, side: THREE.DoubleSide,
-  uniforms: { uTime: { value: 0 }, uCam: { value: new THREE.Vector3() }, uFog: { value: SKY }, uFogDensity: { value: FOG_DENSITY }, ...NIGHT_U },
+  uniforms: { uTime: { value: 0 }, uCam: { value: new THREE.Vector3() }, uFog: { value: SKY }, uFogDensity: { value: FOG_DENSITY }, ...NIGHT_U,
+    tFoam: { value: wwFoamTex }, uFoamSky: waterMat.uniforms.uFoamSky, uFoamSun: waterMat.uniforms.uFoamSun },
   vertexShader: `varying vec2 vUv; varying vec3 vWorld; void main() { vUv = uv; vec4 wp = modelMatrix * vec4(position, 1.0); vWorld = wp.xyz; gl_Position = projectionMatrix * viewMatrix * wp; }`,
   fragmentShader: `
-    uniform float uTime; uniform vec3 uCam; uniform vec3 uFog; uniform float uFogDensity; varying vec2 vUv; varying vec3 vWorld;
+    uniform float uTime; uniform vec3 uCam; uniform vec3 uFog; uniform float uFogDensity; uniform sampler2D tFoam; uniform vec3 uFoamSky; uniform vec3 uFoamSun;
+    varying vec2 vUv; varying vec3 vWorld;
     ${NIGHT_GLSL}
-    float hash(vec2 p) { return fract(sin(dot(p, vec2(127.1, 311.7))) * 43758.5453); }
-    float noise(vec2 p) { vec2 i = floor(p), f = fract(p); f = f * f * (3.0 - 2.0 * f);
-      return mix(mix(hash(i), hash(i + vec2(1.0, 0.0)), f.x), mix(hash(i + vec2(0.0, 1.0)), hash(i + vec2(1.0, 1.0)), f.x), f.y); }
     void main() {
-      float n = noise(vec2(vUv.x * 9.0, vUv.y * 5.0 + uTime * 2.6)) * 0.6 + noise(vec2(vUv.x * 23.0, vUv.y * 11.0 + uTime * 4.0)) * 0.4;
-      float edge = smoothstep(0.0, 0.25, vUv.x) * smoothstep(1.0, 0.75, vUv.x);
-      float a = edge * (0.35 + 0.6 * smoothstep(0.35, 0.75, n));
-      vec3 col = mix(vec3(0.78, 0.86, 0.88), vec3(0.97, 0.99, 1.0), n) * nightLight(vWorld);
+      // strands of water running down (the foam's streaks, scrolled by height at about 6 m/s), thin and torn at the sides,
+      // whiter and wider as they fall; at the foot (vUv.y 1) a white burst where they hit the rocks
+      float s1 = texture2D(tFoam, vec2(vUv.x * 0.8 + 0.13, vWorld.y * 0.06 + uTime * 0.36)).b;
+      float s2 = texture2D(tFoam, vec2(vUv.x * 1.9 + 0.61, vWorld.y * 0.14 + uTime * 0.85)).b;
+      float n = s1 * 0.6 + s2 * 0.4, foot = smoothstep(0.8, 1.0, vUv.y);
+      float edge = smoothstep(0.0, 0.3, vUv.x) * smoothstep(1.0, 0.7, vUv.x);
+      float a = smoothstep(0.6 - 0.5 * edge - 0.3 * foot, 0.85 - 0.35 * edge - 0.2 * foot, n) * (0.3 + 0.7 * edge);
+      a = max(a, foot * edge * 0.8) * (0.8 + 0.2 * vUv.y);
+      vec3 col = (uFoamSky + uFoamSun * 0.5) * (0.9 + 0.3 * n) * nightLight(vWorld);
       float f = 1.0 - exp(-pow(uFogDensity * length(uCam - vWorld), 2.0));
       gl_FragColor = vec4(mix(col, uFog, f), a * (1.0 - f * 0.6));
     }`,
 }));
 function buildSideFalls() {
-  const r = mulberry32(61 + RV.seed);
+  const r = mulberry32(61 + RV.seed), feet = [];
   // no water over a footpath: a fall whose sheet would cross a trail is drawn somewhere else along the banks (planPaths ran first)
   const crossesTrail = (s0, side, top, w) => { for (let e = -0.6; e <= 0.601; e += 0.15) { const s = s0 + e * w, d = trailD(side, s); if (d < top + 1 && onTrail(s, d, side, 0)) return true; } return false; };
   for (let k = 0; k < RV.sideFalls; k++) {
@@ -4324,7 +4785,21 @@ function buildSideFalls() {
     const g = new THREE.BufferGeometry();
     g.setAttribute('position', new THREE.Float32BufferAttribute(pos, 3)); g.setAttribute('uv', new THREE.Float32BufferAttribute(uv, 2)); g.setIndex(idx);
     const m = new THREE.Mesh(g, sideFallMat); m.frustumCulled = false; world.add(m);
+    feet.push([s0, side, w * 0.5]);
   }
+  // where a fall lands, white water on the river at its foot and foam drifting off along the bank
+  const G = waterGeo; if (!G || !feet.length) return;
+  const S = G.attributes.aS.array, LN = G.attributes.aLat.array, WW = G.attributes.aWW.array;
+  for (let k = 0; k < S.length; k++) for (const [s0, side, w] of feet) {
+    const ds = S[k] - s0; if (ds < -w - 2 || ds > 16) continue;
+    const h = hw(S[k]), dl = (side * LN[k] - 1) * h;   // metres out from the bank (negative: on the river)
+    if (dl < -4) continue;
+    const near = ss(w + 1.5, w * 0.4, Math.abs(ds)) * ss(-2.8, -0.6, dl);
+    WW[k * 4] = Math.max(WW[k * 4], near * 0.85);
+    WW[k * 4 + 1] = Math.max(WW[k * 4 + 1], ss(-w, w, ds) * Math.exp(-Math.max(0, ds - w) / 5) * ss(-3.5, -1, dl) * 0.6);
+    WW[k * 4 + 2] = Math.max(WW[k * 4 + 2], near); WW[k * 4 + 3] *= 1 - near;
+  }
+  G.attributes.aWW.needsUpdate = true;
 }
 function buildFlags() {
   if (!RV.flags) return;
@@ -9992,16 +10467,28 @@ function updateParticles(dt) {
   // drifting mist where a waterfall lands
   for (let i = 0; i < MN; i++) {
     if (mLife[i] <= 0) continue;
-    mLife[i] -= dt; mPos[i * 3 + 1] += 0.9 * dt; mPos[i * 3] += mVel[i * 2] * dt; mPos[i * 3 + 2] += mVel[i * 2 + 1] * dt;
+    mLife[i] -= dt; mPos[i * 3 + 1] += 0.6 * dt; mPos[i * 3] += mVel[i * 2] * dt; mPos[i * 3 + 2] += mVel[i * 2 + 1] * dt;
     if (mLife[i] <= 0) mPos[i * 3 + 1] = -100;
   }
   mGeo.attributes.position.needsUpdate = true;
+  // near the boat or the camera: mist rising from the plunge of each fall (more the higher it drops), spray thrown up
+  // where the curtain lands, and now and then from the pile of a strong hole (only to look at: the boat feels none of it)
+  const camS = -camera.position.z;
   for (const f of falls) {
-    if (Math.abs(-B.z - f.s) > 70 || Math.random() > dt * 18) continue;
-    const i = mHead, s = f.s + 1.6 + Math.random() * 3, lat = (Math.random() * 2 - 1) * hw(s);
-    mHead = (mHead + 1) % MN;
-    mPos[i * 3] = cx(s) + lat; mPos[i * 3 + 1] = level(s) + 0.2; mPos[i * 3 + 2] = -s;
-    mVel[i * 2] = (Math.random() - 0.5) * 0.6; mVel[i * 2 + 1] = -(0.5 + Math.random()); mLife[i] = 2 + Math.random() * 2;
+    const near = Math.min(Math.abs(-B.z - f.s), Math.abs(camS - f.s));
+    if (near > 70) continue;
+    if (Math.random() < dt * (12 + 3 * f.drop)) {
+      const i = mHead, s = f.s + 1.4 + Math.random() * 2.6, lat = (Math.random() * 2 - 1) * hw(s);
+      mHead = (mHead + 1) % MN;
+      mPos[i * 3] = cx(s) + lat; mPos[i * 3 + 1] = level(s) + 0.1 + Math.random() * 0.4; mPos[i * 3 + 2] = -s;
+      mVel[i * 2] = (Math.random() - 0.5) * 0.6; mVel[i * 2 + 1] = -(0.3 + Math.random() * 0.9); mLife[i] = 2.5 + Math.random() * 2.5;
+    }
+    if (near < 35 && Math.random() < dt * 30) { const s = f.s + 1.5 + Math.random() * 1.2; emit(cx(s) + (Math.random() * 2 - 1) * hw(s) * 0.9, 0.15, -s, 2, 2.2, 0, -1.2); }
+  }
+  for (const h of holes) {
+    if (h.k < 1 || Math.min(Math.abs(-B.z - h.s), Math.abs(camS - h.s)) > 30 || Math.random() > dt * 8 * h.k) continue;
+    const s = h.s + 0.4 + Math.random() * 0.8, lat = h.c + (Math.random() * 2 - 1) * h.hs * 0.9;
+    if (holeLat(h, lat) > 0.5) emit(cx(s) + lat, 0.2, -s, 2, 1.4, 0, 0);
   }
 }
 const MN = 160, mPos = new Float32Array(MN * 3), mVel = new Float32Array(MN * 2), mLife = new Float32Array(MN);
@@ -14734,6 +15221,7 @@ function applyLook() {
   }
   setGrade(LK && LK.grade);
   document.body.classList.toggle('graded', gradeOn && gradeUsable());
+  waterLook();
 }
 // after the world is built: the self-lit trees, grass and signs take the light of this sky
 function dimUnlit() {
@@ -20796,7 +21284,6 @@ function buildRiver(id) {
   SKY.setHex(RV.sky); ZENITH.setHex(RV.zenith);
   scene.fog.color.copy(SKY); scene.fog.density = RV.fog;
   waterMat.uniforms.uFogDensity.value = RV.fog; sideFallMat.uniforms.uFogDensity.value = RV.fog;
-  waterMat.uniforms.uDeep.value.set(...RV.deep); waterMat.uniforms.uShallow.value.set(...RV.shallow);
   applyNight(mode === 'night');
   applyLook();
   planPaths();
@@ -20863,7 +21350,7 @@ function boot() {
   // alone until the room answers: no chat button, no session controls
   document.body.classList.add('solo');
   resize(); syncUI(); applyBoatColor(); refreshIntro(); startMultiplayer(); startBoard();
-  requestAnimationFrame(t => { last = t; frame(t); });
+  requestAnimationFrame(t => { last = t; frame(t); setTimeout(bake, 0); });   // the water's textures once the first frame is up
   window.__gameReady = true;
   $('bootErr').hidden = true;
 }
