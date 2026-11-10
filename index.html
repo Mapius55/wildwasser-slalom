@@ -1708,7 +1708,7 @@ window.WW_TR = {"en":{"Die künstliche Strecke in Pau am Fuss der Pyrenäen war 
 'use strict';
 const $ = id => document.getElementById(id);
 // shown in the menu and sent to the others: the same number on every phone means the same game
-const GAME_VERSION = 55, GAME_DATE = '07.11.2026';
+const GAME_VERSION = 56, GAME_DATE = '10.11.2026';
 const clamp = (v, a, b) => Math.max(a, Math.min(b, v));
 const REDUCED = matchMedia('(prefers-reduced-motion: reduce)').matches;
 
@@ -1967,8 +1967,13 @@ const LOOKS = {
     fc: ['Tropische Schauer', 24, '15:20'] },
 };
 for (const k in LOOKS) RIVERS[k].look = LOOKS[k];
-// how steeply each natural river falls along the course (m per m) and how many short steep steps it has
-for (const [k, g, n] of [['alpen', 0.016, 4], ['norwegen', 0.02, 4], ['himalaya', 0.008, 2], ['canyon', 0.009, 3], ['sambesi', 0.012, 3], ['vorderrhein', 0.012, 3], ['reunion', 0.022, 5]]) Object.assign(RIVERS[k], { grad: g, steps: n });
+// how steeply each river falls along the course (m per m), how many short steep steps it has and how far they drop (m).
+// The natural rivers fall about as their steep stretches do; the artificial courses by their real total drop over the
+// course: Eiskanal 4 m, Pau 5 m, Vaires 4.5 m (its first drop below the start included), Penrith 5.5 m, Ivrea about
+// 5 m, steepest in its last part (stepsAt: where along the course its steps lie, as parts of the course)
+for (const [k, g, n, d0, d1, at] of [['alpen', 0.02, 5, 0.4, 1.0], ['norwegen', 0.024, 5, 0.45, 1.1], ['himalaya', 0.011, 3, 0.5, 1.1], ['canyon', 0.011, 4, 0.5, 1.2],
+  ['sambesi', 0.015, 4, 0.5, 1.2], ['vorderrhein', 0.014, 4, 0.4, 1.0], ['reunion', 0.026, 6, 0.45, 1.1], ['nacht', 0.008, 2, 0.3, 0.5],
+  ['kanal', 0.0095, 2, 0.25, 0.45], ['pau', 0.011, 3, 0.3, 0.55], ['vaires', 0.0097, 0, 0, 0], ['sydney', 0.012, 2, 0.35, 0.6], ['ivrea', 0.009, 3, 0.4, 0.75, [0.5, 0.95]]]) Object.assign(RIVERS[k], { grad: g, steps: n, stepD: [d0, d1], stepsAt: at });
 // a new course every calendar week, generated from the week number so everyone gets the same one
 const WEEK = (() => {
   const d = new Date(), t = new Date(Date.UTC(d.getFullYear(), d.getMonth(), d.getDate()));
@@ -2091,10 +2096,11 @@ function flowSpeed(s, lat) {
   if (s < 0) v *= clamp((s + 14) / 14, 0, 1);
   return v;
 }
-// height of the water surface: the river steps down at each waterfall
+// height of the water surface: the river steps down at each waterfall; its steady fall starts where the start area ends
+const GRAD_S0 = 6;
 function level(s) {
   let y = 0; for (const f of falls) y -= f.drop * ss(f.s, f.s + 1.6, s);
-  if (GRAD) { y -= GRAD * clamp(s, 0, FINISH_S); for (const t of steps) y -= t.drop * ss(t.s, t.s + t.L, s); }
+  if (GRAD) { y -= GRAD * clamp(s - GRAD_S0, 0, FINISH_S - GRAD_S0); for (const t of steps) y -= t.drop * ss(t.s, t.s + t.L, s); }
   return y;
 }
 function waveH(s, ln, t) {
@@ -2107,7 +2113,18 @@ function vnoise(x, y) {
   const a = hash2(xi, yi), b = hash2(xi + 1, yi), c = hash2(xi, yi + 1), d = hash2(xi + 1, yi + 1);
   return a + (b - a) * u + (c - a) * v + (a - b - c + d) * u * v;
 }
-function terrainBase(s, d, side) { return terrainLandmark(terrainBase0(s, d, side), s, d, side); }
+function terrainBase(s, d, side) { return terrainLandmark(terrainBase0(s, d, side) + stepRelief(s, d), s, d, side); }
+// The land does not step with the river: by the water the bank drops with each step, further out the drop spreads over a
+// longer slope (14 m either side), so a house or a stand beside a step is not cut in two (beside the artificial courses
+// from just behind their walls; not at Vaires' first drop, below its start area)
+function stepRelief(s, d) {
+  if (!steps.length) return 0;
+  const art = RV.style === 'channel' || RV.style === 'boulder', w = 14 * (art ? ss(0.6, 6, d) : ss(4, 18, d));
+  if (w <= 0) return 0;
+  let r = 0;
+  for (const t of steps) if (!t.fixed && s > t.s - w && s < t.s + t.L + w) r += t.drop * (ss(t.s, t.s + t.L, s) - ss(Math.max(8, t.s - w), t.s + t.L + w, s));
+  return r;
+}
 function terrainBase0(s, d, side) {
   if (RV.round) {
     // the crater: the lake's shore, a wide flat floor, then the wall up to the rim (wooded), a little lower beyond it
@@ -2125,19 +2142,24 @@ function terrainBase0(s, d, side) {
   const dd = Math.min(d, 86);
   const n = vnoise(s * 0.02 + side * 37, dd * 0.035 + side * 5) * 0.6 + vnoise(s * 0.06 + side * 7, dd * 0.08) * 0.4;
   const near = Math.min(d, 2.5) * 0.35, rise = Math.max(0, dd - 2.5), bump = (vnoise(s * 0.15 + side * 9, d * 0.3) - 0.5) * Math.min(d, 6) * 0.12;
-  const far = d > 86 ? (d - 86) * (0.05 + 0.12 * n) + (vnoise(s * 0.009 + side * 5.1, d * 0.011 + 2) - 0.5) * 22 * ss(86, 150, d) : 0;
+  // (the steep valleys climb on harder out there: the fjell over Voss, the Himalaya's foothills, Réunion's cirques)
+  const steep = RV.peaks === 'fjell' || RV.peaks === 'giant' || RV.peaks === 'tropic' ? 1.6 : 1;
+  const far = d > 86 ? (d - 86) * (0.05 + 0.12 * n) * steep + (vnoise(s * 0.009 + side * 5.1, d * 0.011 + 2) - 0.5) * 22 * ss(86, 150, d) : 0;
   switch (RV.style) {
     case 'cliffs': return -0.45 + near + rise * (0.75 + n * 0.9) + 0.02 * rise * rise + bump + far;
     case 'terraces': {
-      const h = -0.45 + near + rise * (0.25 + n * 0.35) + 0.009 * rise * rise + far;
+      const h = -0.45 + near + rise * (0.3 + n * 0.4) + 0.011 * rise * rise + far;
       return d > 6 ? h - (h % 1.8) * 0.75 + bump * 0.3 : h + bump;
     }
-    case 'canyon': return -0.45 + near + 38 * ss(4 + n * 3, 9 + n * 6, d) + 26 * ss(26 + n * 8, 33 + n * 8, d) + rise * 0.25 + bump;
+    // (the inner gorge's wall as it was by the water, so the beaches stay; it climbs on 8 m more just above, then the
+    // upper wall, both higher than they were)
+    case 'canyon': return -0.45 + near + 38 * ss(4 + n * 3, 9 + n * 6, d) + 8 * ss(9 + n * 6, 14 + n * 6, d) + 32 * ss(26 + n * 8, 33 + n * 8, d) + rise * 0.3 + bump;
     // concrete walls with a walkway on top, then a park that rises gently
     case 'town': return -0.45 + 3.0 * ss(0, 0.5, d) + Math.max(0, d - 4) * (0.06 + n * 0.1) + (d > 4 ? bump * 0.5 : 0);
-    // boulders set in concrete slope up to a lawn (Pau)
-    case 'boulder': return -0.45 + 1.8 * ss(0, 2.4, d) + Math.max(0, d - 4.5) * (0.04 + n * 0.08) + (d > 4.5 ? bump * 0.4 : 0);
-    case 'channel': return -0.45 + 1.75 * ss(0, 0.4, d) + Math.max(0, d - 5.5) * (0.04 + n * 0.08) + (d > 5.5 ? bump * 0.4 : 0);
+    // boulders set in concrete slope up to a lawn (Pau); a concrete channel. Their courses are built into level land: out
+    // beyond 40 m it stays where it is while the course falls past it, so it stands higher and higher over the water
+    case 'boulder': return -0.45 + 1.8 * ss(0, 2.4, d) + Math.max(0, d - 4.5) * (0.04 + n * 0.08) + (d > 4.5 ? bump * 0.4 : 0) + landFall(s, d, side);
+    case 'channel': return -0.45 + 1.75 * ss(0, 0.4, d) + Math.max(0, d - 5.5) * (0.04 + n * 0.08) + (d > 5.5 ? bump * 0.4 : 0) + landFall(s, d, side);
     // an open valley: a floor of meadow and wood (wider in places), then the slopes
     default: {
       const F = 3 + 21 * ss(0.3, 0.72, vnoise(s * 0.011 + side * 3.3, 1.7)), up = Math.max(0, rise - F), fl = Math.min(rise, F) * 0.06;
@@ -2146,6 +2168,13 @@ function terrainBase0(s, d, side) {
   }
 }
 function terrainH(s, d, side) { return level(s) + terrainBase(s, d, side); }
+// how much higher the land beyond an artificial course stands over the water than at the start (it does not fall); not
+// down to the lakes beside Penrith and Vaires, whose shores stay low (the rowing finish tower's footbridge lands there)
+const landFall = (s, d, side) => {
+  if (!GRAD || d <= 40) return 0;
+  const lake = side > 0 ? (RV.lm === 'penrith' ? 52 : RV.lm === 'vaires' ? 64 : 0) : 0;
+  return (level(-1) - level(s)) * ss(40, 80, d) * (lake ? ss(lake, lake - 14, d) : 1);
+};
 
 let rnd = mulberry32(1);
 const ss = (a, b, x) => { const t = clamp((x - a) / (b - a), 0, 1); return t * t * (3 - 2 * t); };
@@ -2155,6 +2184,8 @@ const COURSE_LEN = 380;   // roughly where the 20 gates hang, as on a real slalo
 const UP_GATES = new Set([2, 5, 8, 11, 14, 17]);   // red upstream gates, each in an eddy
 let gates = [], rocks = [], eddies = [], holes = [], waveTrains = [], falls = [], FINISH_S = 0;
 let steps = [], GRAD = 0;   // the river's fall along the course (m per m) and its short steep steps
+// a venue's grandstands: [s0, side, length, rows]
+const venueStands = () => RV.stands ? RV.stands() : [[FINISH_S - 36, 1, 30], [mode === 'free' ? FINISH_S - 30 : 40, -1, 24], [-26, 1, 18]];
 let shapes = [], islands = [], obstacles = [], rollZone = null;
 let courseVar = 0;   // which course is set on this river: 0 is the standard one
 let swirls = [], boils = [];   // the small currents: whirlpools that turn the boat, boils that push it aside
@@ -2477,16 +2508,21 @@ function generateCourse() {
   }
   // The river falls: steadily along the course (a natural river drops 1 to 2 metres every hundred) and in short steep
   // steps between the boulders, where the water pours half a metre or more into the next pool. From their own random
-  // stream, clear of gates, falls, holes, eddies and islands, so the course stays where it was. Flat before the start
-  // and after the finish (the start area, the lake).
+  // stream, clear of gates, falls, holes, eddies, islands, Kayak Cross's roll zone and a venue's grandstands (which stand
+  // level), so the course stays where it was. Flat before the start and after the finish (the start area, the lake). The
+  // artificial courses fall the same way, as their concrete does; Vaires drops a metre at once over its first ledge, into
+  // the hole below it.
   GRAD = 0; steps = [];
-  if (natural && RV.grad) {
+  if (RV.grad && !RV.calm && !RV.round) {
     GRAD = RV.grad;
-    const rg = mulberry32(RV.seed * 41 + 7 + courseVar * 17);
-    for (let k = 0; k < 300 && steps.length < (RV.steps || 0); k++) {
-      const s0 = 22 + rg() * (FINISH_S - 40), L = 3 + rg() * 2.5, drop = 0.35 + rg() * 0.55, m = s0 + L / 2;
-      if (gates.some(g => Math.abs(g.s - m) < 8) || falls.some(f => m > f.s - 12 && m < f.s + 14) || holes.some(h => Math.abs(h.s - m) < 5)
-        || steps.some(t => Math.abs(t.s - s0) < 22) || eddies.some(e => s0 + L > e.s - 2 && s0 < e.s + e.L + 1) || islands.some(i => m > i.s - i.a - 4 && m < i.s + i.a + 4)) continue;
+    const rg = mulberry32(RV.seed * 41 + 7 + courseVar * 17), [dA, dB] = RV.stepD || [0.35, 0.9], [fa, fb] = RV.stepsAt || [0, 1];
+    const sA = Math.max(22, fa * FINISH_S), sB = Math.min(FINISH_S - 18, fb * FINISH_S), stands = RV.venue ? venueStands() : [];
+    if (RV.firstDrop) steps.push({ s: RV.firstDrop - 3, L: 3, drop: 0.9, fixed: true });
+    for (let k = 0; k < 300 && steps.length < (RV.steps || 0) + (RV.firstDrop ? 1 : 0); k++) {
+      const s0 = sA + rg() * (sB - sA), L = 3 + rg() * 2.5, drop = dA + rg() * (dB - dA), m = s0 + L / 2;
+      if (gates.some(g => Math.abs(g.s - m) < 6.5) || falls.some(f => m > f.s - 12 && m < f.s + 14) || holes.some(h => Math.abs(h.s - m) < 5)
+        || steps.some(t => Math.abs(t.s - s0) < 18) || eddies.some(e => s0 + L > e.s - 2 && s0 < e.s + e.L + 1) || islands.some(i => m > i.s - i.a - 4 && m < i.s + i.a + 4)
+        || (rollZone && s0 + L > rollZone.a - 3 && s0 < rollZone.b + 3) || stands.some(([a, , l]) => s0 + L > a - 10 && s0 < a + l + 10)) continue;
       steps.push({ s: s0, L, drop });
     }
     steps.sort((a, b) => a.s - b.s);
@@ -4189,7 +4225,7 @@ function buildScenery() {
       const sz = riprap ? 0.4 + r2() * 0.45 : d > 5 ? 0.6 + r2() * 2.2 : 0.25 + Math.pow(r2(), 2) * 1.2;
       const [x, y, z] = bankPos(s, d, side);
       P.set(x, y - sz * (0.15 + Math.min(0.5, slopeAt(s, Math.max(d, 0), side) * 0.3)), z); S.set(sz * (0.8 + r2() * 0.6), sz * (0.55 + r2() * 0.35), sz * (0.8 + r2() * 0.6));
-      if (apronAt(s, d, side) > 0.05 || plazaMask(s, d, side) > 0.3 || (RV.lm === 'ivrea' && side > 0 && ivRampAt(s) && d < 3.6)) S.set(0, 0, 0);   // none on the start area, an apron or the ramp
+      if (apronAt(s, d, side) > 0.05 || plazaMask(s, d, side) > 0.3 || (RV.lm === 'ivrea' && side > 0 && ((ivRampAt(s) && d < 3.6) || d > 0.95))) S.set(0, 0, 0);   // none on the start area, an apron, the ramp or Ivrea's wall
       Q.setFromEuler(E.set((r2() - 0.5) * 0.4, r2() * 6, (r2() - 0.5) * 0.4)); M.compose(P, Q, S); boulders.setMatrixAt(k, M);
       const g = 0.85 + r2() * 0.3; C.setRGB(g, g, g * (0.95 + r2() * 0.08)); boulders.setColorAt(k, C);
     }
@@ -4279,7 +4315,7 @@ function buildScenery() {
     // rail or a wall round the back, the ends and the front; over the finish stand of some venues a roof cantilevered from
     // columns at the back. A big stand seats fewer spectators on lower quality
     const ST = Object.assign({}, STYLES.stand, STYLES.stand[RV.lm]), SB = KIT.begin(), lo = SB.lo, steel = ST.frame === 'metal', big = { high: 0.55, mid: 0.3, low: 0.15 }[effQuality()] || 0.3;
-    (RV.stands ? RV.stands() : [[FINISH_S - 36, 1, 30], [mode === 'free' ? FINISH_S - 30 : 40, -1, 24], [-26, 1, 18]]).forEach(([s0, side, len, rows = 6], si) => {
+    venueStands().forEach(([s0, side, len, rows = 6], si) => {
       const sm = s0 + len / 2, f = flowDir(sm), rotY = Math.atan2(-f[0], -f[1]), base = bankSurfaceH(sm, 6, side); bldg.push([side, s0 - 1, s0 + len + 1, 5, 6.7 + rows]);
       // the frame of the first row (x across, z along the stand); the row d metres out stands where bankPos puts it, straight
       // out across the world's x, so it lies a little along z as well; a: across from a row's middle (+ away from the water)
@@ -5475,8 +5511,9 @@ function landmarkH(h, s, d, side) {
     return flat(h);
   }
   if (lm === 'ivrea') return flat(ivreaGround(h, s, d, side));
-  if (lm === 'penrith' && side > 0) { const m = ss(52, 66, d); return flat(h * (1 - m) - 1.8 * m); }
-  if (lm === 'vaires' && side > 0) { const m = ss(64, 78, d); return flat(h * (1 - m) - 1.4 * m); }
+  // the lakes beside Penrith and Vaires lie level, below the finish, however far the course above them has fallen
+  if (lm === 'penrith' && side > 0) { const m = ss(52, 66, d); return flat(h * (1 - m) + (level(FINISH_S) - level(s) - 1.8) * m); }
+  if (lm === 'vaires' && side > 0) { const m = ss(64, 78, d); return flat(h * (1 - m) + (level(FINISH_S) - level(s) - 1.4) * m); }
   if (lm === 'ruinaulta' && side > 0) { const m = ss(3.2, 4.4, d) * ss(10.5, 9.0, d); return flat(h * (1 - m) + 2.1 * m); }
   return flat(h);
 }
@@ -5581,6 +5618,15 @@ const ivCrest = s => Math.min(62, 11 + Math.max(0, s - IV_HEAD) * 0.14);   // th
 const ivSpots = () => ({ castle: FINISH_S * 0.42, cathedral: FINISH_S * 0.42 + 58, cafe: FINISH_S - 42, meadow: [FINISH_S * 0.52, FINISH_S * 0.72] });
 // the wall on river right grows downstream: 1.8 m at the start, 10 m toward the finish
 const ivWall = s => 1.8 + 8.2 * ss(-5, FINISH_S - 25, s);
+// The town does not fall with the course: the river has cut down into the plain. How far the course has fallen at s;
+// the calm upper river, held up by the weir, falls evenly at half the course's rate (no steps: 2.6 m over the course's
+// water by the finish) and below the finish comes down to it again by the end of the reach (ivUp: how high it stands
+// over the course's water); the town's terrace on river right (Via Dora Baltea, the station) 8.5 m over the water at
+// the start, 13 to 14 m over it at the finish; on the far bank the quay 6 m high, the old town's hill, level where the
+// castle stands 28 m up
+const ivFall = s => level(-1) - level(s);
+const ivUp = s => { const F = ivFall(FINISH_S); return ivFall(s) - 0.5 * F * (clamp((s - GRAD_S0) / (FINISH_S - GRAD_S0), 0, 1) + ss(FINISH_S + 200, FINISH_S + 330, s)); };
+const IV_TERR = 8.5, IV_HILL = 28;
 // the ramp down along the high wall to the take-out jetty: its height here and how much of it lies under this s
 function ivRampAt(s) {
   const k = DOCKS.find(k => k.ramp); if (!k) return null;
@@ -5592,8 +5638,10 @@ function ivreaGround(h, s, d, side) {
   if (d <= 0) return h;
   if (side > 0) {
     // a stone ledge at the water, the wall up to the cobbled promenade (higher and higher downstream), the park beyond
-    const H = ivWall(s);
-    let g = -0.45 + 0.7 * ss(0, 0.4, d) + (H - 0.25) * ss(1.1, 1.9, d) + 0.7 * ss(10, 45, d) + (vnoise(s * 0.04, d * 0.07) - 0.5) * 0.6 * ss(14, 24, d);
+    // then the park, level at first (the café, the tents, the playground), climbs to the town's terrace
+    const H = ivWall(s), T = Math.max(H + 1.2, IV_TERR + ivFall(s));
+    let g = -0.45 + 0.7 * ss(0, 0.4, d) + (H - 0.25) * ss(1.1, 1.9, d) + 0.5 * ss(10, 28, d) + (vnoise(s * 0.04, d * 0.07) - 0.5) * 0.6 * ss(14, 24, d);
+    g += (T - H - 0.5) * ss(34, 62, d);
     const rp = ivRampAt(s);
     if (rp) { const on = ss(3.8, 3.0, d) * rp.w; g += (-0.45 + (rp.h + 0.45) * ss(0, 0.4, d) - g) * on; }   // the ramp, and the wall behind it from 3.0 to 3.8
     return g;
@@ -5602,17 +5650,17 @@ function ivreaGround(h, s, d, side) {
   const levee = -0.45 + 1.45 * ss(0, 1.4, d);
   const nb = vnoise(s * 0.035 + 7, d * 0.09), low = IV_LOW - 0.5 + 2.1 * ss(0.62, 0.74, nb) * ss(10.5, 13, d) * ss(crest - 13.5, crest - 16, d);
   let g = levee * (1 - ss(8, 9.6, d)) + low * ss(8, 9.6, d);
-  g += (-1.6 - g) * ss(crest + 0.2, crest + 1.6, d);              // the upper river's bed
+  g += (-1.6 + ivUp(s) - g) * ss(crest + 0.2, crest + 1.6, d);   // the upper river's bed, held up by the weir
   g = g * hd + (-0.45 - 1.15 * ss(0.4, 3, d)) * (1 - hd);         // above the head the upper river reaches the course
   // the north quay wall, Corso Cavour, and the old town on its hill, level where the castle and the cathedral stand
-  const sp = ivSpots(), pl = Math.max(ss(30, 22, Math.abs(s - sp.castle)) * ss(150, 158, d), ss(20, 14, Math.abs(s - sp.cathedral)) * ss(146, 154, d));
-  let town = 4.5 + Math.max(0, d - 104) * 0.26 + (vnoise(s * 0.03, d * 0.05) - 0.5) * 2 * ss(104, 118, d);
-  town += (19.5 - town) * pl;
+  const sp = ivSpots(), pl = Math.max(ss(30, 22, Math.abs(s - sp.castle)) * ss(140, 158, d), ss(20, 14, Math.abs(s - sp.cathedral)) * ss(136, 154, d));
+  let town = 6 + Math.max(0, d - 104) * 0.3 + (vnoise(s * 0.03, d * 0.05) - 0.5) * 2 * ss(104, 118, d);
+  town += (IV_HILL - town) * pl + ivFall(s);
   return g * (1 - ss(IV_FAR, IV_FAR + 3, d)) + town * ss(IV_FAR, IV_FAR + 3, d);
 }
 // where nothing grows: the promenade, the water, the weir, the quay and the town
 function ivreaBare(s, d, side) {
-  if (side > 0) return ivRampAt(s) ? d < 8.6 : d > 1.7 && d < 6.8;
+  if (side > 0) return ivRampAt(s) ? d < 8.6 : (d > 1.7 && d < 6.8) || (s > FINISH_S + 36 && s < FINISH_S + 172 && d < 18);   // the Borghetto
   if (d < 7.4) return false;
   return d > IV_FAR - 1 || s < IV_HEAD || d > ivCrest(s) - 13.5 || terrainH(s, d, side) - level(s) < IV_LOW + 0.45;
 }
@@ -5638,6 +5686,18 @@ const brickTex = shared(repeatTex(canvasTex(128, 128, (g, W, H) => {
   for (let y = 0; y < H; y += 8) for (let x = (y / 8) % 2 ? -8 : 0; x < W; x += 16) {
     const k = 0.78 + r() * 0.36; g.fillStyle = `rgb(${160 * k | 0},${66 * k | 0},${46 * k | 0})`; g.fillRect(x + 1, y + 1, 14, 6);
   }
+})));
+// the grey stone of the river walls (diorite and gabbro), laid in courses: 4 m by 4 m, eight courses of half a metre
+const ivStoneTex = shared(repeatTex(canvasTex(256, 256, (g, W, H) => {
+  const r = mulberry32(31);
+  g.fillStyle = '#3c3d3c'; g.fillRect(0, 0, W, H);
+  for (let y = 0; y < H; y += 32) for (let x = -r() * 60; x < W;) {
+    const w = 38 + r() * 52, k = 0.82 + r() * 0.3, t = r() < 0.5 ? 6 : -4;
+    g.fillStyle = `rgb(${(150 + t) * k | 0},${150 * k | 0},${(146 - t) * k | 0})`; g.fillRect(x + 2, y + 2, w - 3, 29);
+    if (x + w > W) g.fillRect(x + 2 - W, y + 2, w - 3, 29);
+    x += w;
+  }
+  for (let i = 0; i < 3000; i++) { const c = r() < 0.5 ? 70 : 205; g.fillStyle = `rgba(${c},${c},${c},0.25)`; g.fillRect(r() * W, r() * H, 1 + r() * 1.5, 1 + r() * 1.5); }
 })));
 const tileTex = shared(repeatTex(canvasTex(64, 64, (g, W, H) => {
   // curved clay tiles in rows, each lit on one side
@@ -5678,12 +5738,38 @@ function ivreaPlaces(r) {
   const s0 = -140, s1 = FINISH_S + 340, crest = ivCrest;
   // the water beside the course: the calm upper river (also above the head), the lower river below the weir, the cascade
   const upper = new THREE.MeshPhongMaterial({ color: 0x3f6d6c, shininess: 18, specular: 0x1c2626 }), lower = new THREE.MeshPhongMaterial({ color: 0x55857f, shininess: 14, specular: 0x1c2626 });
-  bandAlong(L, s => s < IV_HEAD + 2 ? -0.7 : crest(s) - 0.2, () => IV_FAR + 0.6, s => level(s) - 0.06, upper, s0, s1);
+  bandAlong(L, s => s < IV_HEAD + 2 ? -0.7 : crest(s) - 0.2, () => IV_FAR + 0.6, s => level(s) - 0.06 + ivUp(s), upper, s0, s1);
   bandAlong(L, () => 8.9, s => Math.max(9, crest(s) - 11.7), s => level(s) + IV_LOW, lower, IV_HEAD + 68, s1);   // only where the levee and the weir are apart
   const foam = texRep(foamTex, 2, 0.5); ivreaFoam = foam;
-  bandAlong(L, s => crest(s) - 12, s => crest(s) + 0.15, (s, d, k) => level(s) + (k ? 0.02 : IV_LOW + 0.05), new THREE.MeshBasicMaterial({ map: foam, color: 0xe6efed }), IV_HEAD + 1, s1, 2, (s, d, k) => [k * 2, s * 0.05]);
+  bandAlong(L, s => crest(s) - 12, s => crest(s) + 0.15, (s, d, k) => level(s) + (k ? 0.02 + ivUp(s) : IV_LOW + 0.05), new THREE.MeshBasicMaterial({ map: foam, color: 0xe6efed }), IV_HEAD + 1, s1, 2, (s, d, k) => [k * 2, s * 0.05]);
   bandAlong(L, s => crest(s) - 15.5, s => crest(s) - 11.9, s => level(s) + IV_LOW + 0.04, new THREE.MeshBasicMaterial({ map: foam, color: 0xcfe0de, transparent: true, opacity: 0.55, depthWrite: false }), IV_HEAD + 60, s1, 2, (s, d, k) => [k * 0.6 + 2, s * 0.05]);
 
+  // the stone of the high wall on river right, its courses level while the water falls past them; along the ramp at the
+  // finish its inner wall up to the promenade and its outer wall down to the water. Laid just off the bank's own faces,
+  // knot for knot and row for row (the bank's rows lie every 2 m from s = -140); where the wall turns into the ramp's
+  // walls, over the whole face from the water to the promenade, a little proud of it
+  {
+    const wm = new THREE.MeshLambertMaterial({ map: ivStoneTex, color: 0xcfcac0, side: THREE.DoubleSide }), pos = [], uv = [], idx = [];
+    const strip = (s, ks, up) => ks.map(d => { const y = terrainH(s, d, R); return [cx(s) + hw(s) + d - 0.08, y + up, -s]; });
+    const join = (q, pts) => {
+      const a0 = pos.length / 3, n = pts.length;
+      for (const p of [...q, ...pts]) { pos.push(...p); uv.push(-p[2] * 0.25, p[1] * 0.25); }
+      for (let i = 0; i < n - 1; i++) idx.push(a0 + i, a0 + i + 1, a0 + n + i, a0 + n + i, a0 + i + 1, a0 + n + i + 1);
+    };
+    const ALL = [0, 0.4, 0.8, 1.1, 1.5, 1.9, 2.4, 3.3, 4.4];
+    let prevS = null, prevKey = null;
+    for (let s = -110; s <= FINISH_S + 200; s += 2) {   // on past the Borghetto and the old bridge
+      if (apronAt(s, 1.5, R) > 0.02) { prevS = null; continue; }   // no wall behind the put-in: its apron
+      const rp = ivRampAt(s), w = rp ? rp.w : 0, key = w > 0.999 ? 'r' : w < 0.001 ? 'w' : 't';
+      if (prevS !== null) {
+        if (key !== prevKey || key === 't') join(strip(prevS, ALL, 0.03), strip(s, ALL, 0.03));
+        else for (const ks of key === 'r' ? [[2.4, 3.3, 4.4], [0, 0.4]] : [[1.1, 1.5, 1.9]]) join(strip(prevS, ks, 0), strip(s, ks, 0));
+      }
+      prevS = s; prevKey = key;
+    }
+    const g = new THREE.BufferGeometry(); g.setAttribute('position', new THREE.Float32BufferAttribute(pos, 3)); g.setAttribute('uv', new THREE.Float32BufferAttribute(uv, 2)); g.setIndex(idx); g.computeVertexNormals();
+    const m = new THREE.Mesh(g, wm); m.frustumCulled = false; world.add(m);
+  }
   // the north bank: the quay wall, Corso Cavour with its plane trees, the old town in rows up the hill; across the
   // park on river right the newer town
   const sp = ivSpots(), list = [];
@@ -5723,8 +5809,9 @@ function ivreaPlaces(r) {
     return rp;
   };
   // a town house (STYLES.ivrea_a, _b, _c, _front; o: w across, l along, ht to the eaves at its front, tint, pitch, near,
-  // balc), the river side '+x', the walls 2 m into the ground: stone or a darker plaster up to the first floor, the door
-  // and shop fronts there, the storeys' windows, the balcony on the first with doors onto it, the loggia under the eaves
+  // balc, blind), the river side '+x', the walls 2 m into the ground: stone or a darker plaster up to the first floor, the
+  // door and shop fronts there (none when blind: it stands on the river wall), the storeys' windows, the balcony on the
+  // first with doors onto it, the loggia under the eaves
   const ivHouse = (B, o) => {
     const st = STYLES[o.st], T = st.town, W0 = st.win, lo = B.lo, near = o.near, { w, l, ht } = o, pc = o.tint, cl = KIT.cols(st.wc), gk = [].concat(st.walls)[0];
     const gf = T.gf, nUp = Math.max(1, Math.round((ht - gf) / T.fh)), fh = (ht - gf) / nUp, yL = ht - fh;
@@ -5736,7 +5823,7 @@ function ivreaPlaces(r) {
       else { KIT.quad(B, gk, cl[0], [0, -2, 0], [L, -2, 0], [L, gf, 0], [0, gf, 0]); KIT.quad(B, 'plaster', pc, [0, gf, 0], [L, gf, 0], [L, top, 0], [0, top, 0]); }
       if (f.id === '+x') {
         const nb = Math.max(1, Math.floor((L - 0.6) / T.bay)), bw = L / nb, us = Array.from({ length: nb }, (_, k) => bw * (k + 0.5)), kd = Math.floor(rq() * nb);
-        if (near) us.forEach((u, k) => {
+        if (near && !o.blind) us.forEach((u, k) => {
           if (k === kd) { KIT.quad(B, 'door', T.door, [u - 0.65, 0, 0.05], [u + 0.65, 0, 0.05], [u + 0.65, 2.6, 0.05], [u - 0.65, 2.6, 0.05], [0, 0], [2, 0], [2, 1], [0, 1]); return; }
           const a = Math.min(1.25, bw / 2 - 0.35);
           KIT.quad(B, 'wood', T.shopc, [u - a - 0.12, 0.2, 0.045], [u + a + 0.12, 0.2, 0.045], [u + a + 0.12, gf - 0.55, 0.045], [u - a - 0.12, gf - 0.55, 0.045]);
@@ -5815,6 +5902,23 @@ function ivreaPlaces(r) {
       ivHouse(TB, { st: 'ivrea_front', w: 12, l: len, ht: ht + y - yf, tint, pitch, near: true, balc: true });
       KIT.pop(TB); zz -= len;
     }
+  }
+  // the Borghetto: old houses standing on the high wall of river right below the finish, sheer over the river on either
+  // side of the old bridge (its abutment stays clear), their fronts on top of the wall with no door onto the water, the
+  // red railing between them; you cannot walk through them (borg: where they stand along the river)
+  const borg = [];
+  {
+    const rb = mulberry32(4423), sB = FINISH_S + 92;
+    for (let s = FINISH_S + 40; s < FINISH_S + 168;) {
+      const w = 6.5 + rb() * 5, sm = s + w / 2, dep = 9 + rb() * 3, ht = 11 + rb() * 6, v = Math.floor(rb() * 3), tint = tints[Math.floor(rb() * tints.length)], pitch = 18 + rb() * 9;
+      if (Math.abs(sm - sB) < w / 2 + 5.5) { s += 3; continue; }
+      const d = 1.95 + dep / 2, [x, , z] = atBank(sm, d, R), yc = bankSurfaceH(sm, 2.4, R), yf = Math.min(yc, bankSurfaceH(sm, d + dep / 2, R));
+      KIT.frame(TB, x, yf, z, yawAt(sm) + Math.PI);
+      ivHouse(TB, { st: ['ivrea_a', 'ivrea_b', 'ivrea_c'][v], w: dep, l: w, ht: ht + yc - yf, tint, pitch, near: true, blind: true });
+      borg.push([s, s + w]); solids.push([R, s - 0.1, s + w + 0.1, 1.7, 1.95 + dep]);
+      s += w + 0.2;
+    }
+    bldg.push([R, FINISH_S + 38, FINISH_S + 170, 1.5, 17]);
   }
   // plane trees along Corso Cavour, willows here and there on the levee and the islands are planted by the scenery
   for (let s = -70; s < FINISH_S + 100; s += 8 + r() * 3) { const [x, y, z] = atBank(s, 100.5, L); ivTree(x, y, z, 10 + r() * 4, 1, new THREE.Color().setHSL(0.27, 0.42, 0.28 + r() * 0.06).getHex()); }
@@ -5941,7 +6045,7 @@ function ivreaPlaces(r) {
   const parkFree = (s, d) => plazaMask(s, d, R) < 0.05 && apronAt(s, d, R) < 0.05;
   for (let k = 0; k < 70; k++) {
     const s = -20 + r() * (FINISH_S + 60), d = 9 + Math.pow(r(), 1.3) * 58, ht = 9 + r() * 7;
-    if (!parkFree(s, d) || (s > sp.meadow[0] && s < sp.meadow[1] && d < 50)) continue;   // the meadow stays open
+    if (!parkFree(s, d) || (s > sp.meadow[0] && s < sp.meadow[1] && d < 50) || (s > FINISH_S + 34 && d < 19)) continue;   // the meadow stays open; the Borghetto
     const [x, y, z] = atBank(s, d, R); ivTree(x, y, z, ht, 0.9 + r() * 0.3, new THREE.Color().setHSL(0.25 + r() * 0.05, 0.45, 0.24 + r() * 0.08).getHex());
   }
   const gravel = new THREE.MeshLambertMaterial({ color: 0xb8ad96, map: rockTex });
@@ -6016,10 +6120,15 @@ function ivreaPlaces(r) {
     const [x, y, z] = atBank(s, 8.5, R), mast = new THREE.Mesh(new THREE.CylinderGeometry(0.22, 0.3, 22, 10), steel); mast.position.set(x, y + 11, z); world.add(mast);
     const head = new THREE.Mesh(new THREE.BoxGeometry(2.6, 1.3, 0.5), steel); head.position.set(x, y + 22.2, z); head.rotation.y = yawAt(s) + Math.PI / 2; head.rotation.x = 0.3; world.add(head);
   }
-  // the red railing along the top of the wall on river right, from the start to the finish
+  // the red railing along the top of the wall on river right, from the start to the end of the ramp, and on below it
+  // between the houses of the Borghetto: a post every 2 m and at each house's downstream end (a rail runs on into the next
+  // house), not across the old bridge (one rail ends at its face, the next starts at the other)
   {
     const pts = [], rp0 = ivRampAt(FINISH_S), edge = s => { const rp = ivRampAt(s); return rp && rp.w > 0.5 ? 3.95 : 2.15; };
-    for (let s = -1; s <= FINISH_S + 2; s += 2) pts.push([s, edge(s)]);
+    const sR = rp0 ? rp0.b : FINISH_S + 2, sB = FINISH_S + 92, inHouse = s => borg.some(([a, b]) => s > a + 0.05 && s < b - 0.05);
+    for (let s = -1; s <= sR; s += 2) pts.push([s, edge(s)]);
+    for (const s of [...borg.map(h => h[1]).filter(b => !inHouse(b + 0.4)), sB - 5.7, sB + 3.7, ...Array.from({ length: 80 }, (_, k) => sR + 2 + 2 * k)])
+      if (s > sR && s < FINISH_S + 172 && !inHouse(s) && (s + 2 < sB - 3.6 || s > sB + 3.6)) pts.push([s, 2.15]);
     if (rp0) for (let s = rp0.a + 1; s <= rp0.b - 16; s += 2) pts.push([s, 0.3]);   // along the ramp's water side, open at the landing
     const posts = new THREE.InstancedMesh(new THREE.BoxGeometry(0.07, 1.1, 0.07).translate(0, 0.55, 0), red, pts.length);
     const rails = new THREE.InstancedMesh(new THREE.BoxGeometry(0.06, 0.06, 1), red, pts.length * 2);
@@ -7100,10 +7209,10 @@ function buildPlaces(r) {
     // Vaires-sur-Marne: behind the right bank the plateau's long low buildings under walk-on green roofs, beyond them the
     // 2.2 km regatta lake with its finish tower on stilts; the bar of rooms that bridges the outflow below the finish; the
     // conveyor; light masts; on the left bank the big grandstand of the Games, its front wrapped in the Games' colours
-    ribbon(1, 76, 760, s => level(s) - 1.0, sideWater, -320, FINISH_S + 520);
+    ribbon(1, 76, 760, () => level(FINISH_S) - 1.0, sideWater, -320, FINISH_S + 520);   // a lake: level, a metre under the finish
     {
       const im = new THREE.InstancedMesh(new THREE.SphereGeometry(0.13, 6, 4), new THREE.MeshLambertMaterial({ color: 0xf2f2ee }), 9 * 120), M = new THREE.Matrix4(); let k = 0;
-      for (let lane = 0; lane < 9; lane++) for (let bs = -300; bs < FINISH_S + 480 && k < 9 * 120; bs += 10) { const [x, , z] = atBank(bs, 98 + lane * 13.5, 1); M.makeTranslation(x, level(bs) - 0.96, z); im.setMatrixAt(k++, M); }
+      for (let lane = 0; lane < 9; lane++) for (let bs = -300; bs < FINISH_S + 480 && k < 9 * 120; bs += 10) { const [x, , z] = atBank(bs, 98 + lane * 13.5, 1); M.makeTranslation(x, level(FINISH_S) - 0.96, z); im.setMatrixAt(k++, M); }
       im.count = k; world.add(im);   // the rowing lanes
     }
     const steel = new THREE.MeshLambertMaterial({ color: 0x5b6266 }), lawn = new THREE.MeshLambertMaterial({ color: 0x6c9a44 });
@@ -7170,7 +7279,7 @@ function buildPlaces(r) {
   }
   else if (lm === 'penrith') {
     // Penrith Lakes beside the course, and the conveyor that carries boats with their paddlers back up to the start
-    ribbon(1, 62, 300, s => level(s) - 1.5, sideWater);
+    ribbon(1, 62, 300, () => level(FINISH_S) - 1.5, sideWater);   // a lake: level, a metre and a half under the finish
     conveyor();
     flagsAt(['AU', 'AU'], -6, -1); international('AU', FINISH_S - 24, -1);
   }
@@ -7431,32 +7540,417 @@ function blockedAt(x, z) {
   const s = -z, lat = x - cx(s), side = lat < 0 ? -1 : 1, d = Math.abs(lat) - hw(s);
   return solids.some(b => b[0] === side && s > b[1] && s < b[2] && d > b[3] && d < b[4]);
 }
-// the team bus: a two-tone van with dark windows, kayaks on the roof rack and a sliding door on the river side
+// the team bus: a mid-roof minibus in its club's colour with a white wave along the sides, a band of flush black glass all
+// round (the windscreen and the cab's side windows clear: the dashboard and the seats show through), sliding doors on
+// both sides (the one toward the river opens: busDoorSide), barn doors at the back, LED lamps, two kayaks on edge on roof
+// stackers. 5 m long and 2 m wide like the old box (the bays, the collision boxes and the tunnel fit it). The body is
+// one loft along z (the front at -z): at each z a rounded section (busProf) under the roof line BUS_TOP (the nose, the
+// short bonnet, the raked windscreen, the roof), narrowing into the nose and lifted over the wheel arches
+const BUS_TOP = [[-2.47, 0.98], [-2.46, 1.05], [-2.43, 1.1], [-2.37, 1.15], [-2.25, 1.23], [-2.12, 1.31], [-2.04, 1.36], [-1.58, 2.12], [-1.53, 2.19], [-1.45, 2.245], [-1.33, 2.28], [-1.1, 2.3], [2.3, 2.3], [2.38, 2.285], [2.425, 2.245], [2.45, 2.18]];
+// axles and the arches over them, the windscreen, the sliding door's opening, the cab's side window, the pillars behind
+const BUS_AX = [-1.55, 1.6], BUS_AR = 0.44, BUS_WS = [-2.04, -1.58], BUS_DOOR = [-1.07, 0.08], BUS_CAB = [-2.0, -1.14], BUS_PIL = [[-1.14, -1.07], [1.1, 1.18], [2.3, 2.5]];
+const BUS_WHITE = [0.9375, 0.5];   // a white texel of the livery (parts coloured by their vertices alone)
+const busLerp = (pts, z) => { let i = 0; while (i < pts.length - 2 && pts[i + 1][0] < z) i++; const [z0, a] = pts[i], [z1, b] = pts[i + 1]; return a + (b - a) * clamp((z - z0) / (z1 - z0), 0, 1); };
+// the section at z: half width, sill (over the arches the arch), roof line, the corner's radius, waist and window top
+function busSec(z) {
+  const yt = busLerp(BUS_TOP, z), f = clamp((z + 2.47) / 0.34, 0, 1), rr = clamp((2.45 - z) / 0.06, 0, 1);
+  const hw = 0.995 - 0.12 * Math.pow(1 - f, 2.2) - 0.02 * (1 - rr) * (1 - rr);
+  let yb = 0.33; for (const a of BUS_AX) { const d = Math.abs(z - a); if (d < BUS_AR) yb = Math.max(yb, 0.34 + Math.sqrt(BUS_AR * BUS_AR - d * d)); }
+  const r = clamp((yt - 0.95) * 0.3, 0.05, 0.13), yc = yt - r, yw = Math.min(1.2, yc), ywt = Math.max(yw, Math.min(2.0, yc - 0.03)), tum = 0.06 * clamp((yc - yw) / 0.9, 0, 1);
+  return { yt, hw, yb, r, yc, yw, ywt, tum };
+}
+// its right half from the middle of the floor round to the middle of the roof: [x, y, the strip that ends here]
+// (bot underside, cl the dark cladding over the sill and the arches, pt paint, win the glass band, up above it, cor the
+// roof's edge, roof)
+function busProf(z) {
+  const { hw, yb, r, yc, yw, ywt, tum, yt } = busSec(z), cx = hw - tum - r, a = yb + 0.16;
+  return [[0, yb, ''], [hw - 0.015, yb + 0.006, 'bot'], [hw, yb + 0.055, 'cl'], [hw + 0.006, a, 'cl'],
+    [hw + 0.012, a + (yw - a) * 0.4, 'pt'], [hw + 0.009, a + (yw - a) * 0.75, 'pt'], [hw, yw, 'pt'], [hw - tum, ywt, 'win'], [hw - tum - 0.004, yc, 'up'],
+    [cx + r * Math.cos(0.5), yc + r * Math.sin(0.5), 'cor'], [cx + r * Math.cos(1.05), yc + r * Math.sin(1.05), 'cor'], [cx, yt, 'cor'], [cx * 0.5, yt + 0.012, 'roof'], [0, yt + 0.016, 'roof']];
+}
+// where the loft has its sections: close in the nose and round the arches, at every window and door edge
+function busZs(lo) {
+  const zs = new Set(), add = z => { if (z >= -2.47 && z <= 2.45) zs.add(Math.round(z * 1e4) / 1e4); };
+  for (let z = -2.47; z < -1.3; z += lo ? 0.09 : 0.055) add(z);
+  for (const a of BUS_AX) { for (let k = -6; k <= 6; k += lo ? 2 : 1) add(a + BUS_AR * Math.sin(k / 12 * Math.PI)); add(a - BUS_AR - 0.01); add(a + BUS_AR + 0.01); }
+  for (const z of [2.3, 2.36, 2.4, 2.43, 2.45, -2.47, -2.46, -2.44, -2.18, ...BUS_WS, -2.02, -1.62, ...BUS_DOOR, ...BUS_CAB, ...BUS_PIL.flat()]) add(z);
+  return [...zs].sort((a, b) => a - b);
+}
+// a merged mesh being built (positions, normals, vertex colours, uvs, indices); mesh(material) at the end
+function vbuild() {
+  const P = [], N = [], C = [], U = [], I = [], _p = new THREE.Vector3(), _q = new THREE.Vector3(), _nm = new THREE.Matrix3(), _m = new THREE.Matrix4();
+  const o = {
+    v(x, y, z, nx, ny, nz, c, u, w) { P.push(x, y, z); N.push(nx, ny, nz); C.push(c[0], c[1], c[2]); U.push(u, w); return P.length / 3 - 1; },
+    tri(a, b, c) { I.push(a, b, c); },
+    mark: () => P.length / 3,
+    // new uvs for the vertices added since mark(): f(x, y, z) -> [u, v]
+    uvs(from, f) { for (let i = from; i < P.length / 3; i++) { const t = f(P[3 * i], P[3 * i + 1], P[3 * i + 2]); U[2 * i] = t[0]; U[2 * i + 1] = t[1]; } return o; },
+    // a three.js geometry through a matrix: one colour (or c(x, y, z) of its own position), its uvs or a fixed [u, v]
+    geo(g, m, c, uv) {
+      const p = g.attributes.position, n = g.attributes.normal, t = g.attributes.uv, b = P.length / 3, flip = !!m && m.determinant() < 0, fc = typeof c === 'function' ? null : KIT.rgb(c);
+      if (m) _nm.getNormalMatrix(m);
+      for (let i = 0; i < p.count; i++) {
+        _p.set(p.getX(i), p.getY(i), p.getZ(i)); const col = fc || KIT.rgb(c(_p.x, _p.y, _p.z));
+        if (m) _p.applyMatrix4(m);
+        _q.set(n.getX(i), n.getY(i), n.getZ(i)); if (m) _q.applyMatrix3(_nm).normalize();
+        o.v(_p.x, _p.y, _p.z, _q.x, _q.y, _q.z, col, uv ? uv[0] : t ? t.getX(i) : 0, uv ? uv[1] : t ? t.getY(i) : 0);
+      }
+      const ix = g.index ? g.index.array : null, cnt = ix ? ix.length : p.count;
+      for (let i = 0; i < cnt; i += 3) { const a = b + (ix ? ix[i] : i), e = b + (ix ? ix[i + 1] : i + 1), f = b + (ix ? ix[i + 2] : i + 2); if (flip) I.push(a, f, e); else I.push(a, e, f); }
+      g.dispose(); return o;
+    },
+    // a box between two corners, turned by rx/ry/rz about its middle (or placed by m after that)
+    box(x0, y0, z0, x1, y1, z1, c, rot, uv = BUS_WHITE, m) {
+      _m.makeRotationFromEuler(new THREE.Euler(...(rot || [0, 0, 0]))).setPosition((x0 + x1) / 2, (y0 + y1) / 2, (z0 + z1) / 2);
+      if (m) _m.premultiply(m);
+      return o.geo(new THREE.BoxGeometry(Math.abs(x1 - x0), Math.abs(y1 - y0), Math.abs(z1 - z0)), _m, c, uv);
+    },
+    // a box from its middle, size and turn
+    boxc(x, y, z, w, h, d, c, rot, uv = BUS_WHITE, m) { return o.box(x - w / 2, y - h / 2, z - d / 2, x + w / 2, y + h / 2, z + d / 2, c, rot, uv, m); },
+    // rows of points (each row one line across): normals by differences, quads turned outward (out(i, k): a direction
+    // pointing out there), look(i, k) the quad's [colour, uv(x, y, z) or null for the white texel], or null: no quad
+    loft(R, out, look) {
+      const nr = R.length, nk = R[0].length, nrm = [];
+      for (let i = 0; i < nr; i++) {
+        const row = [];
+        for (let k = 0; k < nk; k++) {
+          const a = R[Math.max(0, i - 1)][k], b = R[Math.min(nr - 1, i + 1)][k], c = R[i][Math.max(0, k - 1)], d = R[i][Math.min(nk - 1, k + 1)];
+          const ux = b[0] - a[0], uy = b[1] - a[1], uz = b[2] - a[2], vx = d[0] - c[0], vy = d[1] - c[1], vz = d[2] - c[2];
+          let nx = uy * vz - uz * vy, ny = uz * vx - ux * vz, nz = ux * vy - uy * vx; const ot = out(i, k);
+          if (nx * ot[0] + ny * ot[1] + nz * ot[2] < 0) { nx = -nx; ny = -ny; nz = -nz; }
+          const l = Math.hypot(nx, ny, nz) || 1; row.push([nx / l, ny / l, nz / l]);
+        }
+        nrm.push(row);
+      }
+      for (let i = 0; i < nr - 1; i++) for (let k = 0; k < nk - 1; k++) {
+        const L = look(i, k); if (!L) continue;
+        const q = [[i, k], [i + 1, k], [i + 1, k + 1], [i, k + 1]].map(([a, kk]) => { const p = R[a][kk], n = nrm[a][kk], uv = L[1] ? L[1](p[0], p[1], p[2]) : BUS_WHITE; return o.v(p[0], p[1], p[2], n[0], n[1], n[2], L[0], uv[0], uv[1]); });
+        // the face's own normal against the corners' normals: which way round
+        const p0 = R[i][k], p1 = R[i + 1][k], p2 = R[i + 1][k + 1], p3 = R[i][k + 1], n0 = nrm[i][k];
+        const ax = p2[0] - p0[0], ay = p2[1] - p0[1], az = p2[2] - p0[2], bx = p3[0] - p1[0], by = p3[1] - p1[1], bz = p3[2] - p1[2];
+        const fx = ay * bz - az * by, fy = az * bx - ax * bz, fz = ax * by - ay * bx;
+        if (fx * n0[0] + fy * n0[1] + fz * n0[2] >= 0) { I.push(q[0], q[1], q[2], q[0], q[2], q[3]); } else { I.push(q[0], q[2], q[1], q[0], q[3], q[2]); }
+      }
+      return o;
+    },
+    count: () => I.length / 3,
+    geom() {
+      const g = new THREE.BufferGeometry();
+      g.setAttribute('position', new THREE.Float32BufferAttribute(P, 3)); g.setAttribute('normal', new THREE.Float32BufferAttribute(N, 3));
+      g.setAttribute('color', new THREE.Float32BufferAttribute(C, 3)); g.setAttribute('uv', new THREE.Float32BufferAttribute(U, 2));
+      g.setIndex(I); g.computeBoundingSphere(); return g;
+    },
+    mesh: mat => new THREE.Mesh(o.geom(), mat),
+  };
+  return o;
+}
+// the materials every bus and trailer share (kept across rivers); the paint, the seats, the sign and the screens are
+// each bus's own. The lamps light themselves at night (nightWorld leaves them be), so a parked bus shows where it stands
+let busMats = null;
+function busM() {
+  if (busMats) return busMats;
+  const k = m => shared(m);
+  busMats = {
+    metal: k(new THREE.MeshPhongMaterial({ vertexColors: true, shininess: 45, specular: 0x4a4a4a })),
+    inner: k(new THREE.MeshLambertMaterial({ vertexColors: true })),
+    lamp: k(new THREE.MeshBasicMaterial({ vertexColors: true })),
+    glass: k(new THREE.MeshPhongMaterial({ vertexColors: true, transparent: true, opacity: 0.5, shininess: 120, specular: 0xb8c4cc, depthWrite: false })),
+  };
+  busMats.lamp.nightSelf = true;
+  return busMats;
+}
+// every bus has the same geometry (its team colour comes from its livery: BUS_TEAM, BUS_SEAT), so each part is made once
+// per quality (the lamps per night too) and shared by all buses and trailers, kept across rivers
+const busGeos = new Map();
+function busGeo(key, make) { let g = busGeos.get(key); if (!g) { g = make(); g.__keep = true; busGeos.set(key, g); } return g; }
+// the livery, painted once per bus: the team colour (darker toward the sill) with a white wave sweeping up toward the
+// back and a paler one under it, spray over its crest, the cab doors' seams; the number plates under it; a column at the
+// right: the team colour on top (BUS_TEAM: the parts in the team colour), white in the middle (BUS_WHITE: everything
+// coloured by its vertices), the seats' fabric at the bottom (BUS_SEAT). u runs from the nose (0) to the tail (448 px),
+// v from the waist down to the sill (200 px); drawn at 512 x 256 (half that on phones)
+const busU = z => (z + 2.47) / 4.92 * 0.875, busV = y => clamp((1.22 - y) / 0.82, 0, 1) * 200 / 256;
+const busUV = (x, y, z) => [busU(z), busV(y)];
+const BUS_TEAM = [0.9375, 0.125], BUS_SEAT = [0.9375, 0.875], BUS_TEAM_LOOK = [[1, 1, 1], () => BUS_TEAM];
+function busPlate(g, x0, y0, w, h, text, rear) {
+  g.fillStyle = '#15181a'; g.fillRect(x0, y0, w, h); g.fillStyle = '#f7f7f2'; g.fillRect(x0 + 2, y0 + 2, w - 4, h - 4);
+  g.strokeStyle = '#15181a'; g.lineWidth = 2; g.strokeRect(x0 + 5, y0 + 5, w - 10, h - 10);
+  if (rear) {
+    // the Swiss shield at the left, a made-up canton's (a white wave on blue) at the right
+    const sh = (cx, f) => { g.beginPath(); g.moveTo(cx - 11, y0 + 11); g.lineTo(cx + 11, y0 + 11); g.lineTo(cx + 11, y0 + h * 0.55); g.quadraticCurveTo(cx + 9, y0 + h - 9, cx, y0 + h - 7); g.quadraticCurveTo(cx - 9, y0 + h - 9, cx - 11, y0 + h * 0.55); g.closePath(); f(); };
+    sh(x0 + 22, () => { g.fillStyle = '#d52b1e'; g.fill(); g.fillStyle = '#fff'; g.fillRect(x0 + 20, y0 + 16, 4, 16); g.fillRect(x0 + 14, y0 + 22, 16, 4); });
+    sh(x0 + w - 22, () => { g.fillStyle = '#2f6fb5'; g.fill(); g.strokeStyle = '#fff'; g.lineWidth = 3; g.beginPath(); g.moveTo(x0 + w - 31, y0 + 27); g.quadraticCurveTo(x0 + w - 26, y0 + 20, x0 + w - 22, y0 + 26); g.quadraticCurveTo(x0 + w - 18, y0 + 32, x0 + w - 13, y0 + 24); g.stroke(); });
+  }
+  g.fillStyle = '#121416'; g.font = '700 34px "Barlow Condensed", "Arial Narrow", sans-serif'; g.textAlign = 'center'; g.textBaseline = 'middle';
+  g.fillText(text, x0 + w / 2, y0 + h / 2 + 2, w - (rear ? 64 : 20));
+}
+function busTex(col, plate, lo) {
+  const t = canvasTex(lo ? 256 : 512, lo ? 128 : 256, (g, W, H) => {
+    if (lo) { g.scale(0.5, 0.5); W = 512; H = 256; }
+    const c = new THREE.Color(col), hex = k => '#' + c.clone().multiplyScalar(k).getHexString(), pale = '#' + c.clone().lerp(new THREE.Color(1, 1, 1), 0.5).getHexString();
+    g.fillStyle = '#fff'; g.fillRect(0, 0, W, H);
+    const gr = g.createLinearGradient(0, 0, 0, 202); gr.addColorStop(0, col); gr.addColorStop(0.8, col); gr.addColorStop(1, hex(0.78));
+    g.fillStyle = gr; g.fillRect(0, 0, 448, 202);
+    // the wave: thin at the nose, swelling as it rises toward the back, its crest under the rear windows
+    const band = (t0, t1, b0, b1, fill) => { g.fillStyle = fill; g.beginPath(); g.moveTo(0, t0); g.bezierCurveTo(130, t0, 210, t1 + 12, 448, t1); g.lineTo(448, b1); g.bezierCurveTo(230, b1 + 8, 150, b0, 0, b0); g.closePath(); g.fill(); };
+    band(150, 16, 157, 48, '#f6f6f2'); band(166, 58, 171, 67, pale);
+    const r = mulberry32(77); g.fillStyle = '#f6f6f2';
+    for (let k = 0; k < 14; k++) { const x = 190 + r() * 150, y = 120 - (x - 190) * 0.5 - 10 - r() * 26; g.beginPath(); g.arc(x, y, 1.5 + r() * 2.5, 0, 7); g.fill(); }
+    // the cab doors' seams
+    g.fillStyle = 'rgba(10,12,14,0.6)'; for (const z of [-2.02, -1.12]) g.fillRect(busU(z) * W - 1, 0, 2, 120);
+    busPlate(g, 2, 204, 214, 50, plate, true); busPlate(g, 226, 204, 214, 50, plate, false);
+    g.fillStyle = col; g.fillRect(448, 0, 64, 80);
+    g.fillStyle = '#' + new THREE.Color(c.r * 0.5 + 0.06, c.g * 0.5 + 0.06, c.b * 0.5 + 0.07).getHexString(); g.fillRect(448, 176, 64, 80);
+  });
+  t.flipY = false; return t;
+}
+// the colour of the body's skin at z on a strip (null: an opening: a window you see through, a door's place)
+function busLook(tag, z) {
+  const door = z > BUS_DOOR[0] && z < BUS_DOOR[1], black = [0.035, 0.045, 0.055], pillar = [0.1, 0.11, 0.12], white = [0.93, 0.93, 0.91];
+  if (tag === 'bot') return [[0.07, 0.075, 0.08], null];
+  if (tag === 'cl') return door ? null : [[0.16, 0.17, 0.18], null];
+  if (tag === 'pt') return door ? null : [[1, 1, 1], busUV];
+  if (tag === 'win') {
+    if (door || (z > BUS_CAB[0] && z < BUS_CAB[1])) return null;
+    if (z < BUS_WS[0]) return BUS_TEAM_LOOK;
+    return [BUS_PIL.some(([a, b]) => z > a && z < b) ? pillar : black, null];
+  }
+  if (tag === 'up') return door ? null : z < BUS_WS[0] ? BUS_TEAM_LOOK : z < BUS_WS[1] ? [black, null] : [white, null];
+  if (tag === 'cor') return z < BUS_WS[0] ? BUS_TEAM_LOOK : z < BUS_WS[1] ? [black, null] : [white, null];
+  // the roof: the bonnet, the black cowl, the windscreen (black-rimmed), the white roof
+  if (z < -2.08) return BUS_TEAM_LOOK;
+  if (z < BUS_WS[0]) return [black, null];
+  if (z < BUS_WS[1]) return z > BUS_WS[0] + 0.03 && z < BUS_WS[1] - 0.04 ? null : [black, null];
+  return [white, null];
+}
+// one wheel pair on an axle (the axle along x through the origin): tyres with a rounded tread, five-spoke alloy rims
+function busWheels(B, r, wd, x, lo) {
+  const n = lo ? 10 : 16, tyre = [0.055, 0.058, 0.062], rimC = [0.74, 0.76, 0.78], dark = [0.12, 0.13, 0.14], rr = r * 0.6;
+  const prof = [[rr, -wd / 2], [r * 0.84, -wd / 2 - 0.006], [r * 0.95, -wd / 2 + 0.005], [r, -wd / 2 + 0.03], [r, wd / 2 - 0.03], [r * 0.95, wd / 2 - 0.005], [r * 0.84, wd / 2 + 0.006], [rr, wd / 2]].map(([a, b]) => new THREE.Vector2(a, b));
+  const m = new THREE.Matrix4(), M = new THREE.Matrix4();
+  for (const s of [1, -1]) {
+    M.makeScale(s, 1, 1).multiply(m.makeTranslation(x, 0, 0));
+    B.geo(new THREE.LatheGeometry(prof, n).rotateZ(-Math.PI / 2), M, tyre, BUS_WHITE);
+    // the rim: a dark well, the lip, five spokes, the hub; the inner side closed
+    B.geo(new THREE.CircleGeometry(rr, n).rotateY(Math.PI / 2).translate(wd / 2 - 0.03, 0, 0), M, dark, BUS_WHITE);
+    if (!lo) B.geo(new THREE.CircleGeometry(rr, n).rotateY(-Math.PI / 2).translate(-wd / 2 + 0.02, 0, 0), M, dark, BUS_WHITE);
+    B.geo(new THREE.RingGeometry(rr * 0.84, rr * 1.02, n, 1).rotateY(Math.PI / 2).translate(wd / 2 + 0.002, 0, 0), M, rimC, BUS_WHITE);
+    for (let k = 0; k < 5; k++) B.geo(new THREE.BoxGeometry(0.018, rr * 0.8, rr * 0.22).translate(wd / 2 - 0.006, rr * 0.48, 0).rotateX(k * Math.PI * 0.4), M, rimC, BUS_WHITE);
+    B.geo(new THREE.CylinderGeometry(rr * 0.26, rr * 0.3, 0.03, lo ? 6 : 10, 1, true).rotateZ(Math.PI / 2).translate(wd / 2 - 0.008, 0, 0), M, rimC, BUS_WHITE);
+    B.geo(new THREE.CircleGeometry(rr * 0.26, lo ? 6 : 10).rotateY(Math.PI / 2).translate(wd / 2 + 0.008, 0, 0), M, [0.2, 0.21, 0.22], BUS_WHITE);
+  }
+  return B;
+}
+// a strip swept along a path in plan (each point [x, z]): its section [d out from the path, y] (outward: +d), as for the
+// bumpers that wrap round the corners; ctr: the point in plan it bulges away from
+function busSweep(B, path, prof, ctr, look) {
+  const R = [], O = [];
+  path.forEach((p, i) => {
+    const a = path[Math.max(0, i - 1)], b = path[Math.min(path.length - 1, i + 1)];
+    let nx = b[1] - a[1], nz = -(b[0] - a[0]); const l = Math.hypot(nx, nz) || 1; nx /= l; nz /= l;
+    if (nx * (p[0] - ctr[0]) + nz * (p[1] - ctr[1]) < 0) { nx = -nx; nz = -nz; }
+    R.push(prof.map(([d, y]) => [p[0] + nx * d, y, p[1] + nz * d])); O.push([nx, nz]);
+  });
+  const dc = prof.reduce((s, q) => s + q[0], 0) / prof.length, yc = prof.reduce((s, q) => s + q[1], 0) / prof.length;
+  return B.loft(R, (i, k) => [O[i][0] * (prof[k][0] - dc) * 8, prof[k][1] - yc, O[i][1] * (prof[k][0] - dc) * 8], look);
+}
+// the body: the skin (one loft each side from the nose to the tail, the openings left out), the nose and the tail, the
+// bumpers, the face, the plates, mirrors, wipers, handles, the tow bar, the roof rack (white: its vertex colours; the team
+// colour: white on BUS_TEAM)
+function busBodyGeo(lo) {
+  const zs = busZs(lo), secs = zs.map(z => busProf(z)), np = secs[0].length, B = vbuild(), WH = [1, 1, 1], TEAM = [1, 1, 1];
+  for (const s of [1, -1]) {
+    const R = zs.map((z, i) => secs[i].map(p => [s * p[0], p[1], z]));
+    B.loft(R, (i, k) => { const a = secs[i][Math.max(0, k - 1)], b = secs[i][Math.min(np - 1, k + 1)]; return [s * (b[1] - a[1]), -(b[0] - a[0]), 0]; }, (i, k) => busLook(secs[i][k + 1][2], (zs[i] + zs[i + 1]) / 2));
+  }
+  // the nose and the tail: flat caps over the end sections, in columns (the barn doors' windows, their seam, the D-pillars)
+  for (const [i, nz] of [[0, -1], [zs.length - 1, 1]]) {
+    const sec = secs[i], z = zs[i], cols = nz > 0 ? [0, 0.075, 0.49, 0.51, 0.925, 1] : [0, 1];
+    for (let k = 0; k < np - 1; k++) {
+      const p0 = sec[k], p1 = sec[k + 1], tag = p1[2];
+      for (let j = 0; j < cols.length - 1; j++) {
+        const c = nz < 0 ? (tag === 'bot' || tag === 'cl' ? [0.16, 0.17, 0.18] : TEAM) : tag === 'bot' || tag === 'cl' ? [0.16, 0.17, 0.18] : tag === 'pt' ? (j === 2 ? [0.1, 0.1, 0.11] : TEAM)
+          : tag === 'win' ? (j === 0 || j === 4 ? [0.1, 0.11, 0.12] : [0.035, 0.045, 0.055]) : [0.93, 0.93, 0.91];
+        const uv = c === TEAM ? BUS_TEAM : BUS_WHITE, xs = [p0, p1].map(p => [-p[0] + 2 * p[0] * cols[j], -p[0] + 2 * p[0] * cols[j + 1]]);
+        const q = [[xs[0][0], p0[1]], [xs[0][1], p0[1]], [xs[1][1], p1[1]], [xs[1][0], p1[1]]].map(([x, y]) => B.v(x, y, z, 0, 0, nz, c, uv[0], uv[1]));
+        if (nz > 0) B.tri(q[0], q[1], q[2]), B.tri(q[0], q[2], q[3]); else B.tri(q[0], q[2], q[1]), B.tri(q[0], q[3], q[2]);
+      }
+    }
+  }
+  const grey = [0.16, 0.17, 0.18], dgrey = [0.09, 0.095, 0.1], black = [0.03, 0.035, 0.04], alu = [0.6, 0.62, 0.64], chrome = [0.55, 0.57, 0.6];
+  // bumpers wrapping round the corners: painted on top, dark plastic under it; the rear one with a step on top
+  const bump = (y0, y1) => [[-0.1, y0], [-0.01, y0], [0, y0 + 0.03], [0.008, (y0 + y1) / 2], [0, y1 - 0.03], [-0.02, y1], [-0.1, y1]];
+  busSweep(B, [[-1.0, -2.17], [-0.99, -2.3], [-0.95, -2.42], [-0.86, -2.52], [-0.7, -2.565], [0, -2.58], [0.7, -2.565], [0.86, -2.52], [0.95, -2.42], [0.99, -2.3], [1.0, -2.17]], bump(0.29, 0.6), [0, -2.0], (i, k) => k < 3 ? [grey, null] : BUS_TEAM_LOOK);
+  busSweep(B, [[-1.0, 2.22], [-0.99, 2.33], [-0.94, 2.45], [-0.84, 2.525], [-0.6, 2.555], [0.6, 2.555], [0.84, 2.525], [0.94, 2.45], [0.99, 2.33], [1.0, 2.22]], bump(0.3, 0.58), [0, 2.0], (i, k) => [k === 5 && i > 2 && i < 6 ? [0.3, 0.31, 0.32] : grey, null]);
+  for (const s of [-1, 1]) { B.box(s * 0.9, 0.29, -2.19, s * 1.0, 0.6, -2.17, grey); B.box(s * 0.9, 0.3, 2.22, s * 1.0, 0.58, 2.24, grey); }
+  // the face: the grille (dark, three bars, the club's badge), the lamps' housings, the lower intake, the plate
+  B.box(-0.52, 0.62, -2.485, 0.52, 0.9, -2.465, black);
+  for (const y of [0.69, 0.76, 0.83]) B.box(-0.5, y - 0.007, -2.495, 0.5, y + 0.007, -2.48, chrome);
+  B.geo(new THREE.CylinderGeometry(0.055, 0.055, 0.012, lo ? 10 : 16).rotateX(Math.PI / 2).translate(0, 0.76, -2.5), null, [0.95, 0.95, 0.93], BUS_WHITE);
+  for (const s of [-1, 1]) B.boxc(s * 0.71, 0.86, -2.452, 0.37, 0.15, 0.05, black, [0, -s * 0.36, 0]);
+  B.box(-0.55, 0.32, -2.592, 0.55, 0.41, -2.575, black);
+  // the plates (their quads take the plates' row of the livery: the front one at the right, the rear one at the left),
+  // each 5 mm proud of what it sits on (so they do not flicker from afar)
+  let mk = B.mark(); B.box(-0.27, 0.45, -2.6, 0.27, 0.58, -2.59, black);
+  mk = B.mark(); B.geo(new THREE.PlaneGeometry(0.52, 0.11), new THREE.Matrix4().makeRotationY(Math.PI).setPosition(0, 0.515, -2.605), WH, null).uvs(mk, (x, y) => [(229 + (0.26 - x) / 0.52 * 208) / 512, (207 + (0.57 - y) / 0.11 * 44) / 256]);
+  mk = B.mark(); B.geo(new THREE.PlaneGeometry(0.52, 0.11), new THREE.Matrix4().setPosition(0, 0.695, 2.456), WH, null).uvs(mk, (x, y) => [(5 + (x + 0.26) / 0.52 * 208) / 512, (207 + (0.75 - y) / 0.11 * 44) / 256]);
+  // mirrors on stalks at the foot of the A-pillars (the glass toward the back), wipers parked on the windscreen
+  for (const s of [-1, 1]) {
+    B.box(s * 0.97, 1.36, -1.99, s * 1.08, 1.39, -1.95, black);
+    B.boxc(s * 1.12, 1.5, -1.97, 0.07, 0.27, 0.15, black); B.boxc(s * 1.125, 1.5, -1.985, 0.075, 0.26, 0.12, WH, null, BUS_TEAM);
+    B.boxc(s * 1.115, 1.5, -1.893, 0.05, 0.22, 0.004, [0.62, 0.68, 0.74]);
+  }
+  for (const [x0, x1] of [[-0.74, -0.08], [0.06, 0.7]]) B.box(x0, 1.398, -2.033, x1, 1.41, -2.021, black);
+  // the cab doors' handles, the sliding doors' rail covers, mud flaps behind the rear wheels
+  for (const s of [-1, 1]) {
+    B.boxc(s * 1.003, 1.06, -1.3, 0.025, 0.035, 0.17, black);
+    B.box(s * 0.99, 1.165, BUS_DOOR[1] + 0.06, s * 1.012, 1.205, 2.26, dgrey);
+    B.box(s * 0.85, 0.12, 2.05, s * 0.95, 0.38, 2.07, black);
+  }
+  // the back: the barn doors' handle, the rear wiper, the tow bar with its ball (the trailer's hitch), the exhaust
+  B.boxc(0.13, 1.08, 2.462, 0.16, 0.035, 0.025, black);
+  B.boxc(-0.45, 1.27, 2.458, 0.42, 0.012, 0.012, black, [0, 0, 0.35]);
+  B.box(-0.05, 0.36, 2.4, 0.05, 0.44, 2.6, black); B.geo(new THREE.SphereGeometry(0.03, 8, 6).translate(0, 0.475, 2.6), null, chrome, BUS_WHITE); B.box(-0.012, 0.44, 2.588, 0.012, 0.46, 2.612, chrome);
+  B.geo(new THREE.CylinderGeometry(0.03, 0.03, 0.18, 8).rotateX(Math.PI / 2).translate(-0.62, 0.27, 2.5), null, [0.3, 0.3, 0.3], BUS_WHITE);
+  // the roof rack: rails along the edges, two crossbars with stacker posts (foam on them and on the bars) for the kayaks
+  for (const s of [-1, 1]) {
+    B.box(s * 0.76, 2.33, -1.15, s * 0.8, 2.37, 2.25, black);
+    for (const z of [-1.1, 0.55, 2.2]) B.box(s * 0.755, 2.3, z - 0.05, s * 0.805, 2.34, z + 0.05, black);
+  }
+  for (const z of [-0.85, 1.25]) { B.box(-0.88, 2.37, z - 0.03, 0.88, 2.4, z + 0.03, alu); for (const s of [-1, 1]) B.box(s * 0.82, 2.36, z - 0.035, s * 0.89, 2.405, z + 0.035, black); }
+  for (const z of [-0.85, 1.25]) {
+    B.box(-0.018, 2.4, z - 0.018, 0.018, 3.0, z + 0.018, black); B.box(-0.035, 2.5, z - 0.035, 0.035, 2.95, z + 0.035, [0.1, 0.16, 0.3]);
+    for (const s of [-1, 1]) B.box(s * 0.04, 2.4, z - 0.04, s * 0.5, 2.43, z + 0.04, [0.1, 0.16, 0.3]);
+  }
+  B.boxc(0.0, 2.33, -1.0, 0.05, 0.05, 0.14, black, [0.3, 0, 0]);   // the aerial's fin
+  return B.geom();
+}
+// the glass over the windscreen and the cab's side windows, a few mm off the skin (lighter toward the top: the sky in it)
+function busGlassGeo(lo) {
+  const zs = busZs(lo), secs = zs.map(z => busProf(z)), np = secs[0].length, G = vbuild();
+  const sky = y => [0.1 + 0.5 * clamp((y - 1.3) / 0.9, 0, 1), 0.13 + 0.56 * clamp((y - 1.3) / 0.9, 0, 1), 0.16 + 0.6 * clamp((y - 1.3) / 0.9, 0, 1)];
+  for (const s of [1, -1]) {
+    const GR = zs.map((z, i) => secs[i].map(p => [s * p[0], p[1], z]));
+    G.loft(GR, (i, k) => { const a = secs[i][Math.max(0, k - 1)], b = secs[i][Math.min(np - 1, k + 1)]; return [s * (b[1] - a[1]), -(b[0] - a[0]), 0]; }, (i, k) => {
+      const z = (zs[i] + zs[i + 1]) / 2, tag = secs[i][k + 1][2];
+      if (tag === 'roof' && z > BUS_WS[0] && z < BUS_WS[1]) return [sky(secs[i][k + 1][1]), null];
+      if (tag === 'win' && z > BUS_CAB[0] && z < BUS_CAB[1]) return [sky(secs[i][k + 1][1] + 0.2), null];
+      return null;
+    });
+  }
+  const g = G.geom(), gp = g.attributes.position, gn = g.attributes.normal;
+  for (let i = 0; i < gp.count; i++) gp.setXYZ(i, gp.getX(i) + gn.getX(i) * 0.004, gp.getY(i) + gn.getY(i) * 0.004, gp.getZ(i) + gn.getZ(i) * 0.004);
+  g.computeBoundingSphere(); return g;
+}
+// the lamps: headlamps with their daytime strip, indicators, fog lamps; tail lamps up the D-pillars, the third brake
+// lamp, reflectors; the side repeaters. At night the head, tail and brake lamps are lit (the lamp material lights itself),
+// the indicators, reversing lamps and reflectors stay dark
+function busLampGeo(lo, night) {
+  const L = vbuild(), head = night ? [1, 0.97, 0.88] : [0.8, 0.84, 0.88], red = night ? [1, 0.1, 0.07] : [0.6, 0.07, 0.06], drl = [1, 1, 0.97];
+  const amber = night ? [0.2, 0.1, 0.02] : [0.95, 0.52, 0.1], white = night ? [0.13, 0.13, 0.13] : [0.86, 0.86, 0.86], refl = night ? [0.22, 0.03, 0.02] : red;
+  for (const s of [-1, 1]) {
+    L.boxc(s * 0.7, 0.875, -2.462, 0.34, 0.1, 0.05, head, [0, -s * 0.36, 0]);
+    L.boxc(s * 0.69, 0.812, -2.47, 0.3, 0.018, 0.05, drl, [0, -s * 0.36, 0]);
+    const lensM = new THREE.Matrix4().makeRotationY(-s * 0.36).setPosition(s * 0.7, 0.875, -2.462);
+    for (const [u, rr] of [[-0.09, 0.036], [0.05, 0.03]]) {
+      const m = lensM.clone().multiply(new THREE.Matrix4().makeTranslation(s * u, 0.002, -0.031)).multiply(new THREE.Matrix4().makeRotationY(Math.PI));
+      L.geo(new THREE.RingGeometry(rr * 0.62, rr, lo ? 8 : 14), m, [0.5, 0.53, 0.57], BUS_WHITE); L.geo(new THREE.CircleGeometry(rr * 0.62, lo ? 8 : 12), m, night ? [1, 1, 0.95] : [0.95, 0.96, 0.97], BUS_WHITE);
+    }
+    L.boxc(s * (busSec(-2.43).hw - 0.012), 0.86, -2.43, 0.05, 0.09, 0.07, amber, [0, -s * 0.9, 0]);
+    L.geo(new THREE.CircleGeometry(0.035, lo ? 8 : 12).rotateY(Math.PI).translate(s * 0.45, 0.365, -2.598), null, night ? head : [0.82, 0.85, 0.88], BUS_WHITE);
+    L.boxc(s * 1.0, 1.02, -2.2, 0.012, 0.025, 0.06, amber);
+    // the tail lamp: red up top, amber, white (reversing), red again; round the corner a little
+    for (const [y0, y1, c] of [[1.12, 1.45, red], [0.98, 1.12, amber], [0.88, 0.98, white], [0.74, 0.88, red]]) {
+      L.box(s * 0.835, y0, 2.45, s * 0.985, y1, 2.462, c); L.box(s * 0.985, y0, 2.36, s * 1.002, y1, 2.452, c);
+    }
+    L.box(s * 0.45, 0.4, 2.563, s * 0.58, 0.45, 2.571, refl);
+  }
+  L.box(-0.22, 2.07, 2.452, 0.22, 2.1, 2.462, red);
+  return L.geom();
+}
+// the signs: a lit panel in the black glass behind each sliding door (leaning in with the windows), one in the rear
+// windows over the trailer's boats; uv across each the same (the canvas: drawBusSign, paintBusSign)
+function busSignGeo() {
+  const P = [], N = [], U = [], I = [], { hw, yw, ywt, tum } = busSec(1.2), y0 = 1.42, y1 = 1.86, z0 = 0.3, z1 = 2.1;
+  const xAt = y => hw - tum * (y - yw) / (ywt - yw) + 0.006, nl = Math.hypot(ywt - yw, tum), n = [(ywt - yw) / nl, tum / nl];
+  const quad = (pts, nn) => { const b = P.length / 3; pts.forEach((p, i) => { P.push(...p); N.push(...nn); U.push(...[[0, 0], [1, 0], [1, 1], [0, 1]][i]); }); I.push(b, b + 1, b + 2, b, b + 2, b + 3); };
+  quad([[xAt(y0), y0, z1], [xAt(y0), y0, z0], [xAt(y1), y1, z0], [xAt(y1), y1, z1]], [n[0], n[1], 0]);
+  quad([[-xAt(y0), y0, z0], [-xAt(y0), y0, z1], [-xAt(y1), y1, z1], [-xAt(y1), y1, z0]], [-n[0], n[1], 0]);
+  quad([[-0.6, 1.6, 2.457], [0.6, 1.6, 2.457], [0.6, 1.9, 2.457], [-0.6, 1.9, 2.457]], [0, 0, 1]);
+  const g = new THREE.BufferGeometry(); g.setAttribute('position', new THREE.Float32BufferAttribute(P, 3)); g.setAttribute('normal', new THREE.Float32BufferAttribute(N, 3)); g.setAttribute('uv', new THREE.Float32BufferAttribute(U, 2)); g.setIndex(I);
+  g.computeBoundingSphere(); return g;
+}
+// a bus's sign, a lit display: its name on the team colour, where it goes (if anywhere) in amber on black beside it
+function paintBusSign(g, W, H, col, head, text) {
+  const c = new THREE.Color(col), light = c.r * 0.3 + c.g * 0.59 + c.b * 0.11 > 0.62;
+  g.fillStyle = '#07090b'; g.fillRect(0, 0, W, H);
+  g.font = '800 40px "Barlow Condensed", "Arial Narrow", sans-serif'; g.textAlign = 'center'; g.textBaseline = 'middle';
+  const hw = text ? Math.min(W * 0.42, g.measureText(head).width + 22) : W;
+  g.fillStyle = col; g.fillRect(0, 0, hw, H);
+  g.fillStyle = light ? '#111416' : '#fff'; g.fillText(head, hw / 2, H / 2 + 2, hw - 10);
+  if (text) { g.fillStyle = '#ffb21e'; g.fillText(text, hw + (W - hw) / 2, H / 2 + 2, W - hw - 14); }
+}
 function makeBus(col = myColor, signT = null) {
-  const grp = new THREE.Group(), team = new THREE.Color(col);
-  const lower = new THREE.MeshPhongMaterial({ color: team, shininess: 70, specular: 0x555555 }), upper = new THREE.MeshPhongMaterial({ color: 0xf4f4f0, shininess: 70, specular: 0x555555 });
-  const glass = new THREE.MeshPhongMaterial({ color: 0x1d262c, shininess: 100, specular: 0x8899aa }), black = new THREE.MeshLambertMaterial({ color: 0x15181a });
-  const add = (geo, mat, x, y, z) => { const m = new THREE.Mesh(geo, mat); m.position.set(x, y, z); grp.add(m); return m; };
-  add(new THREE.BoxGeometry(2.0, 1.0, 4.9), lower, 0, 0.85, 0);
-  add(new THREE.BoxGeometry(2.0, 0.95, 4.3), upper, 0, 1.82, 0.25);
-  const nose = add(new THREE.BoxGeometry(1.98, 0.9, 0.9), upper, 0, 1.62, -2.0); nose.rotation.x = -0.45;
-  add(new THREE.BoxGeometry(2.02, 0.55, 3.6), glass, 0, 1.9, 0.45);
-  const ws = add(new THREE.BoxGeometry(1.8, 0.75, 0.05), glass, 0, 1.68, -2.32); ws.rotation.x = -0.45;
-  grp.userData.front = [nose, ws];   // hidden for whoever sits inside: from there they would fill the view
-  for (const [x, z] of [[-0.95, -1.55], [0.95, -1.55], [-0.95, 1.6], [0.95, 1.6]]) { const w = add(new THREE.CylinderGeometry(0.36, 0.36, 0.26, 16), black, x, 0.36, z); w.rotation.z = Math.PI / 2; }
-  add(new THREE.BoxGeometry(1.7, 0.06, 3.6), black, 0, 2.33, 0.2);
-  for (let k = 0; k < 2; k++) { const kay = new THREE.Mesh(remoteDeckGeo, new THREE.MeshLambertMaterial({ color: k ? 0xf2c230 : 0xe3531d })); kay.position.set(k ? 0.45 : -0.45, 2.45, 0.2); kay.scale.set(0.9, 0.9, 1.0); grp.add(kay); }
-  const sign = canvasTex(256, 64, (g, W, H) => { g.fillStyle = myColor; g.fillRect(0, 0, W, H); g.fillStyle = '#fff'; g.font = '800 40px "Barlow Condensed", sans-serif'; g.textAlign = 'center'; g.textBaseline = 'middle'; g.fillText(tr('TEAM') + ' · ' + cleanNick(myNick).toUpperCase(), W / 2, H / 2 + 2, W - 16); });
-  for (const k of [-1, 1]) { const pl = new THREE.Mesh(new THREE.PlaneGeometry(1.8, 0.45), new THREE.MeshBasicMaterial({ map: signT || sign })); pl.position.set(k * 1.011, 0.85, 1.5); pl.rotation.y = k * Math.PI / 2; grp.add(pl); }
-  if (signT) sign.dispose();
-  // face and tail: bumpers, headlights, a grille, tail lights
-  for (const z of [-2.5, 2.5]) add(new THREE.BoxGeometry(2.06, 0.22, 0.16), black, 0, 0.5, z);
-  const lamp = new THREE.MeshBasicMaterial({ color: 0xfff4d6 }), tail = new THREE.MeshBasicMaterial({ color: 0xc8281e });
-  for (const k of [-1, 1]) { add(new THREE.CylinderGeometry(0.15, 0.15, 0.05, 14), lamp, k * 0.66, 1.0, -2.46).rotation.x = Math.PI / 2; add(new THREE.BoxGeometry(0.16, 0.3, 0.04), tail, k * 0.86, 1.05, 2.46); }
-  add(new THREE.BoxGeometry(0.7, 0.16, 0.04), black, 0, 0.98, -2.47);
-  // the sliding door on the side that faces the river (x is set when the bus is parked)
-  const door = add(new THREE.BoxGeometry(0.04, 1.75, 1.15), lower, 0, 1.2, -1.2); grp.userData.door = door;
+  const grp = new THREE.Group(), lo = effQuality() === 'low', M = busM(), night = mode === 'night', q = lo ? 'lo' : 'hi';
+  const plate = 'WW ' + (2000 + parseInt(String(new THREE.Color(col).getHexString()), 16) % 7919), livery = busTex(col, plate, lo);
+  const paint = new THREE.MeshPhongMaterial({ vertexColors: true, map: livery, shininess: 70, specular: 0x555555 });
+  const body = new THREE.Mesh(busGeo('body' + q, () => busBodyGeo(lo)), paint); grp.add(body);
+  const glass = new THREE.Mesh(busGeo('glass' + q, () => busGlassGeo(lo)), M.glass); grp.add(glass);
+  const lamps = new THREE.Mesh(busGeo('lamps' + q + night, () => busLampGeo(lo, night)), M.lamp); grp.add(lamps);
+  // the wheels: an axle each (they roll as the bus goes: busRoll)
+  const wg = busGeo('wheels' + q, () => busWheels(vbuild(), 0.345, 0.215, 0.865, lo).geom());
+  grp.userData.wheels = BUS_AX.map(z => { const w = new THREE.Mesh(wg, M.metal); w.position.set(0, 0.345, z); grp.add(w); return w; });
+  // the sign (the club's buses bring their own canvas, drawn as they are planned: drawBusSign)
+  const sign = signT ? null : canvasTex(256, 64, (g, W, H) => paintBusSign(g, W, H, col, tr('TEAM'), cleanNick(myNick).toUpperCase()));
+  if (signT) signT.anisotropy = Math.min(4, renderer.capabilities.getMaxAnisotropy());
+  const sm = new THREE.MeshBasicMaterial({ map: signT || sign, polygonOffset: true, polygonOffsetFactor: -2, polygonOffsetUnits: -2 }); sm.nightSelf = true;
+  grp.add(new THREE.Mesh(busGeo('sign', busSignGeo), sm));
+  // the two club kayaks on edge against the stackers, decks out, strapped at both bars
+  grp.add(new THREE.Mesh(busGeo('roof' + q, () => {
+    const roof = vbuild();
+    for (const [s, tint] of [[-1, 0xe3531d], [1, 0xf2c230]]) { const c = new THREE.Color(1, 1, 1).lerp(new THREE.Color(tint), 0.7); carryBoat(roof, false, lo, new THREE.Matrix4().makeRotationZ(-s * Math.PI / 2).setPosition(s * 0.121, 2.68, 0.1), [c.r, c.g, c.b], [-0.95, 1.15]); }
+    return roof.geom();
+  }), carryMat('klassik', '#ffffff')));
+  // the sliding doors: the one on the river side opens (busDoorSide puts it there), its twin on the other side stays shut
+  const dg = busGeo('door', busDoorGeo), door = new THREE.Mesh(dg, paint), door2 = new THREE.Mesh(dg, paint);
+  door.position.set(1.02, 1.2, -1.2); door2.position.set(-1.02, 1.2, -1.2); grp.add(door, door2);
+  grp.userData.door = door; grp.userData.door2 = door2; busDoorSide(grp, 1);
+  grp.userData.front = [glass];   // hidden for whoever sits inside (from there the glass is all you would see of the outside)
+  grp.userData.lamps = lamps; grp.userData.livery = livery;
   return grp;
+}
+// the wheels roll as the bus goes d metres (the trailer's too, on the hitch's pivot)
+function busRoll(b, piv, d) {
+  const ws = b.userData.wheels; if (ws) for (const w of ws) w.rotation.x -= d / 0.345;
+  if (piv) for (const c of piv.children) if (c.userData.wheels) for (const w of c.userData.wheels) w.rotation.x -= d / 0.28;
+}
+// which side the sliding door that opens is on (+1: +x); its twin goes on the other side
+function busDoorSide(b, side) {
+  const d = b.userData.door, d2 = b.userData.door2;
+  d.position.x = side * 1.02; d.scale.x = side;
+  if (d2) { d2.position.x = -side * 1.02; d2.scale.x = -side; }
+}
+// a sliding door (made for the +x side, in its own frame: (1.02, 1.2, -1.2) of the bus): the skin over the opening
+// from under the sill's cladding to under the roof's edge with a gap round it, its black window, the handle; inside the
+// trim with a pull. Open it stands out at 1.1 and back at z -0.1 (clear of the opening, not over the rear arch)
+function busDoorGeo() {
+  const B = vbuild(), z0 = BUS_DOOR[0] + 0.006, z1 = BUS_DOOR[1] - 0.006, sec = busProf(-0.5).slice(1, 9), ox = -1.02 + 0.004, oy = -1.2, oz = 1.2;
+  const R = [z0, z1].map(z => sec.map(p => [p[0] + ox, p[1] + oy, z + oz]));
+  B.loft(R, (i, k) => { const a = sec[Math.max(0, k - 1)], b = sec[Math.min(7, k + 1)]; return [b[1] - a[1], -(b[0] - a[0]), 0]; }, (i, k) => {
+    const tag = sec[k + 1][2];
+    if (tag === 'cl') return [[0.16, 0.17, 0.18], null];
+    if (tag === 'pt') return [[1, 1, 1], (x, y, z) => busUV(0, y - oy, z - oz)];
+    if (tag === 'win') return [[0.035, 0.045, 0.055], null];
+    return [[0.93, 0.93, 0.91], null];
+  });
+  // the edges (front and back) and the trim inside
+  const yb = sec[0][1] + oy, yw = sec[5][1] + oy, yt = sec[7][1] + oy, xi = 0.995 + ox - 0.05, trim = [0.24, 0.25, 0.27], light = [0.5, 0.5, 0.48];
+  for (const z of [z0, z1]) B.box(xi, yb, z + oz - 0.004, 0.995 + ox, yt, z + oz + 0.004, [0.05, 0.05, 0.05]);
+  B.box(xi - 0.01, yb + 0.06, z0 + oz, xi, yw, z1 + oz, trim);
+  B.box(xi - 0.01, yt - 0.14, z0 + oz, xi, yt, z1 + oz, light);
+  B.box(xi - 0.05, yw - 0.32, z0 + oz + 0.08, xi - 0.01, yw - 0.28, z0 + oz + 0.3, [0.12, 0.12, 0.13]);
+  // the handle outside, at the door's front edge
+  B.box(0.995 + ox + 0.003, yw - 0.16, z0 + oz + 0.05, 0.995 + ox + 0.022, yw - 0.12, z0 + oz + 0.22, [0.03, 0.035, 0.04]);
+  return B.geom();
 }
 let bus = null;
 // the club: which bus you sit in and where (driver or passenger), where it goes, when it left; your plan from the table;
@@ -7575,7 +8069,7 @@ function buildClub(side, y0, wallM, roofM, glassM, signTex) {
     const cvs = document.createElement('canvas'); cvs.width = 256; cvs.height = 64;
     const st = new THREE.CanvasTexture(cvs), b = makeBus(col, st), d = 28 + k * 4.5, s0 = -82, [bx, , bz] = at(s0, d);
     b.position.set(bx, y0, bz); b.rotation.y = yawAt(s0) + Math.PI; world.add(b);
-    b.userData.door.position.x = side * 1.02;
+    busDoorSide(b, side);
     busInterior(b);
     const piv = new THREE.Group(), trl = makeTrailer(null); piv.position.set(0, 0, 2.6); trl.position.set(0, 0, 2.5); piv.add(trl); b.add(piv); b.rotation.order = 'YXZ';
     addBox(b, 0, 2.5, 2.2, 10.6, 0.15); const box = boxes[boxes.length - 1];
@@ -7784,7 +8278,7 @@ function busOut() {
   announce();
   if (!b) return;
   const door = b.g.userData.door, lx = Math.sign(door.position.x || 1) * 1.9;
-  b.g.localToWorld(_cw.set(lx, 0, -1.2)); P.x = _cw.x; P.z = _cw.z; P.y = groundAt(P.x, P.z) ?? b.y;
+  b.g.localToWorld(_cw.set(lx, 0, (BUS_DOOR[0] + BUS_DOOR[1]) / 2)); P.x = _cw.x; P.z = _cw.z; P.y = groundAt(P.x, P.z) ?? b.y;
 }
 // the driver goes: the bus drives off (you in it), the screen goes dark, the trip ends at the destination
 function busGo() {
@@ -7982,15 +8476,18 @@ function updateDrive(dt) {
   // the cockpit: the wheel turns with you, the speedometer shows km/h
   const wh = b.userData.wheel; if (wh) wh.rotation.set(-1.1, 0, -drv.steer * 2.6);
   const so = b.userData.speedo, kmh = Math.round(Math.abs(drv.v) * 3.6);
-  if (so && kmh !== so.last) { so.last = kmh; const g = so.cv.getContext('2d'); g.fillStyle = '#05080a'; g.fillRect(0, 0, 128, 64); g.fillStyle = '#7ef0a0'; g.font = '700 36px "Barlow Condensed", monospace'; g.textAlign = 'center'; g.textBaseline = 'middle'; g.fillText(String(kmh), 52, 32); g.font = '600 14px sans-serif'; g.fillStyle = '#9fb3b0'; g.fillText('km/h', 104, 38); so.tex.needsUpdate = true; }
+  if (so && kmh !== so.last && drv.cam !== 1) { so.last = kmh; drawSpeedo(so, kmh); }   // (behind the bus you do not see it)
+  busRoll(b, drv.piv, drv.v * dt);   // the wheels roll with the road (the trailer's too)
   if (drv.piv) drv.piv.rotation.y = Math.atan2(Math.sin(drv.tr - drv.th), Math.cos(drv.tr - drv.th));
 }
 // a bus following another player's driving (their presence carries the pose)
 function followBus(b, piv, bp) {
+  const x0 = b.position.x, z0 = b.position.z;
   b.position.x += (bp[1] - b.position.x) * 0.25; b.position.z += (bp[2] - b.position.z) * 0.25;
   const yc = groundAt(b.position.x, b.position.z); if (yc !== null) b.position.y += (yc - b.position.y) * 0.25;
   const dth = Math.atan2(Math.sin(bp[3] - b.rotation.y), Math.cos(bp[3] - b.rotation.y)); b.rotation.y += dth * 0.25;
   if (piv) piv.rotation.y = Math.atan2(Math.sin(bp[4] - bp[3]), Math.cos(bp[4] - bp[3]));
+  busRoll(b, piv, -(b.position.x - x0) * Math.sin(b.rotation.y) - (b.position.z - z0) * Math.cos(b.rotation.y));
 }
 const peerPresence = id => { for (const p of lastPeers) if (p.peer === id) return p.presence || null; return null; };
 // the camera when you drive: behind and above the bus (C: from the driver's seat)
@@ -8046,49 +8543,305 @@ function rideOut() {
 // a black veil over the view (the trip)
 function fade(v) { const f = $('fade'); if (f) f.style.opacity = String(v); }
 function drawBusSign(b, text) {
-  const g = b.cvs.getContext('2d'), W = b.cvs.width, H = b.cvs.height;
-  g.fillStyle = b.col; g.fillRect(0, 0, W, H); g.fillStyle = '#fff'; g.textAlign = 'center'; g.textBaseline = 'middle';
-  g.font = '800 30px "Barlow Condensed", sans-serif'; g.fillText((tr('BUS') + ' ' + (b.k + 1) + (text ? ' · ' + text : '')).toUpperCase().slice(0, 26), W / 2, H / 2 + 2);
+  paintBusSign(b.cvs.getContext('2d'), b.cvs.width, b.cvs.height, b.col, (tr('BUS') + ' ' + (b.k + 1)).toUpperCase(), (text || '').toUpperCase().slice(0, 22));
   b.st.needsUpdate = true;
 }
-// a boat trailer behind a bus (child of the bus, so it drives with it): two places, a kayak and a canoe
+// ---- boats as they are carried: on the bus's roof and on the trailer ----
+// The slalom boat's own shape (kayakGeo's loft, coarser), the canoe with the high deck a kneeling paddler needs round a
+// round cockpit (its saddle inside); the coaming and the dark cockpit; ratchet straps round it where it lies on the bars.
+// carryTex: the deck's design (your skin, or the classic deck tinted per boat by its vertices) at the left, then the
+// carbon hull, the strap's webbing and the ratchet's steel, the coaming, the cockpit, the saddle's foam
+const carryTexCache = new Map(), carryMatCache = new Map();
+function carryTex(skin, col) {
+  const key = skin + col; if (carryTexCache.has(key)) return carryTexCache.get(key);
+  const klassik = skin === 'klassik' || !SKINS.some(k => k[0] === skin), src = klassik ? deckTex : skinTex(skin, col);
+  const t = canvasTex(256, 512, (g, W, H) => {
+    g.drawImage(src.image, 0, 0, 128, 512);
+    if (klassik && col !== '#ffffff') { g.globalCompositeOperation = 'multiply'; g.fillStyle = '#' + new THREE.Color(0xffffff).lerp(new THREE.Color(col), 0.7).getHexString(); g.fillRect(0, 0, 128, 512); g.globalCompositeOperation = 'source-over'; }
+    for (let y = 0; y < 512; y += 4) for (let x = 128; x < 192; x += 4) { g.fillStyle = ((x + y) / 4) % 2 ? '#262b2f' : '#191d20'; g.fillRect(x, y, 4, 4); }
+    g.fillStyle = '#e8742a'; g.fillRect(192, 0, 32, 384); g.fillStyle = '#b4501a'; g.fillRect(192, 0, 3, 384); g.fillRect(221, 0, 3, 384);
+    g.fillStyle = 'rgba(255,255,255,0.3)'; for (let y = 2; y < 384; y += 6) { g.fillRect(197, y, 1, 3); g.fillRect(218, y, 1, 3); }
+    g.fillStyle = '#9aa1a6'; g.fillRect(192, 384, 32, 128); g.fillStyle = '#5f666b'; for (let y = 392; y < 512; y += 10) g.fillRect(195, y, 26, 3);
+    g.fillStyle = '#111315'; g.fillRect(224, 0, 32, 256); g.fillStyle = '#040506'; g.fillRect(224, 256, 32, 128); g.fillStyle = '#5d6469'; g.fillRect(224, 384, 32, 128);
+  });
+  t.flipY = false; t.__keep = true; carryTexCache.set(key, t); return t;
+}
+function carryMat(skin, col) {
+  const key = skin + col; if (carryMatCache.has(key)) return carryMatCache.get(key);
+  const m = shared(new THREE.MeshPhongMaterial({ map: carryTex(skin, col), vertexColors: true, shininess: 70, specular: 0x555555 }));
+  carryMatCache.set(key, m); return m;
+}
+// the boats on the trailers wear your design as soon as you change it; designs no trailer shows any more are let go
+// (the roof's club kayaks keep theirs)
+function carryRetint() {
+  const ts = club.buses.map(b => b.trl); if (bus && bus.userData.trailer) ts.push(bus.userData.trailer);
+  const m = ts.length ? carryMat(mySkin, myColor) : null;
+  for (const t of ts) for (const k in t.userData.boats) t.userData.boats[k].material = m;
+  for (const [key, mm] of carryMatCache) if (mm !== m && key !== 'klassik#ffffff') { mm.map.dispose(); mm.dispose(); carryMatCache.delete(key); carryTexCache.delete(key); }
+}
+// a strip between rows of points (rows[r][j]), facing the side the rows turn to from row 0 to 1 then along j; uvs uv(r, j)
+function carryStrip(rows, uv, closed) {
+  const pos = [], uvs = [], idx = [], nj = rows[0].length;
+  rows.forEach((row, r) => row.forEach((p, j) => { pos.push(p[0], p[1], p[2]); uvs.push(...uv(r, j)); }));
+  for (let r = 0; r < rows.length - 1; r++) for (let j = 0; j < nj - (closed ? 0 : 1); j++) {
+    const a = r * nj + j, b = (r + 1) * nj + j, c = r * nj + (j + 1) % nj, d = (r + 1) * nj + (j + 1) % nj;
+    idx.push(a, b, c, b, d, c);
+  }
+  const g = new THREE.BufferGeometry(); g.setAttribute('position', new THREE.Float32BufferAttribute(pos, 3)); g.setAttribute('uv', new THREE.Float32BufferAttribute(uvs, 2));
+  g.setIndex(idx); g.computeVertexNormals(); return g;
+}
+// one boat into the build B through matrix m (its frame as the game's: bow at -z, deck up): c1 the canoe; tint the
+// classic deck's colour (white for a skin); straps: the z (in its frame) of the bars it is strapped to
+function carryBoat(B, c1, lo, m, tint, straps) {
+  const NZ = lo ? 14 : 22, NU = lo ? 6 : 8, Z0 = -1.65, Z1 = 1.85, white = [1, 1, 1], zc = 0.12;
+  const sec = t => {
+    const sw = Math.pow(Math.sin(Math.PI * Math.pow(clamp(t, 0, 1), 0.9)), 0.6);
+    return { w: 0.3 * sw, edge: 0.02 + 0.03 * sw, keel: -0.1 * Math.pow(sw, 0.7), crown: 0.03 + 0.16 * Math.pow(Math.sin(Math.PI * clamp((t - 0.04) / 0.92, 0, 1)), 1.3) + (c1 ? 0.11 * Math.exp(-Math.pow((t - 0.5) / 0.16, 2)) : 0) };
+  };
+  const tz = z => (z - Z0) / (Z1 - Z0), deckY = (s, u) => s.edge + s.crown * Math.pow(Math.max(0, 1 - u * u), 0.75), hullY = (s, u) => s.keel + (s.edge - s.keel) * Math.pow(Math.min(1, Math.abs(u)), 2.5);
+  const deckAt = (x, z) => { const s = sec(tz(z)); return deckY(s, s.w > 1e-4 ? x / s.w : 0); };
+  for (const deck of [true, false]) {
+    const rows = [];
+    for (let i = 0; i <= NZ; i++) { const t = i / NZ, s = sec(t); rows.push(Array.from({ length: NU + 1 }, (_, j) => { const u = -1 + 2 * j / NU; return [u * s.w, deck ? deckY(s, u) : hullY(s, u), Z0 + (Z1 - Z0) * t]; })); }
+    // the deck faces up, the hull down: the rows run bow to stern, the points left to right (the hull's the other way)
+    if (!deck) rows.forEach(r => r.reverse());
+    B.geo(carryStrip(rows, (r, j) => [deck ? (j / NU) * 0.5 : 0.5 + (1 - j / NU) * 0.25, r / NZ]), m, deck ? tint : white, null);
+  }
+  // the coaming round the cockpit (the canoe's round, the kayak's long), the dark cockpit inside it
+  const a = c1 ? 0.2 : 0.19, b = c1 ? 0.23 : 0.37, n = lo ? 12 : 20, ring = (k, dy) => Array.from({ length: n }, (_, j) => { const f = j / n * Math.PI * 2, x = a * k * Math.cos(f), z = zc + b * k * Math.sin(f); return [x, deckAt(x, z) + dy, z]; });
+  B.geo(carryStrip([ring(1.0, -0.012), ring(1.0, 0.022), ring(0.9, 0.024), ring(0.88, -0.01)], () => [0.9375, 0.25], true), m, white, null);
+  {
+    const r = ring(0.88, -0.01), yc = r.reduce((s, p) => s + p[1], 0) / n - 0.004, pos = [0, yc, zc], idx = [];
+    r.forEach(p => pos.push(p[0], p[1], p[2])); for (let j = 0; j < n; j++) idx.push(0, 1 + (j + 1) % n, 1 + j);
+    const g = new THREE.BufferGeometry(); g.setAttribute('position', new THREE.Float32BufferAttribute(pos, 3)); g.setIndex(idx); g.computeVertexNormals();
+    g.setAttribute('uv', new THREE.Float32BufferAttribute(new Array(pos.length / 3 * 2).fill(0).map((v, i) => i % 2 ? 0.62 : 0.9375), 2));
+    B.geo(g, m, white, null);
+    if (c1) B.geo(new THREE.BoxGeometry(0.11, 0.06, 0.2).translate(0, yc + 0.02, zc + 0.03), m, white, [0.9375, 0.87]);
+  }
+  // grab loops at the ends
+  if (!lo) for (const z of [-1.5, 1.7]) B.geo(new THREE.TorusGeometry(0.028, 0.006, 4, 10).rotateX(Math.PI / 2).translate(0, deckAt(0, z) + 0.004, z), m, white, [0.9375, 0.25]);
+  // the straps: round the boat's section at each bar, a ratchet on the deck
+  for (const zs of straps || []) {
+    const s = sec(tz(zs)), pts = [], N1 = lo ? 6 : 10, N2 = lo ? 4 : 6;
+    for (let j = 0; j <= N1; j++) { const u = -1 + 2 * j / N1; pts.push([u * s.w * 1.02, deckY(s, u)]); }
+    for (let j = 1; j < N2; j++) { const u = 1 - 2 * j / N2; pts.push([u * s.w * 1.02, hullY(s, u)]); }
+    const off = pts.map((p, j) => { const q = pts[(j + pts.length - 1) % pts.length], r = pts[(j + 1) % pts.length], dx = r[0] - q[0], dy = r[1] - q[1], l = Math.hypot(dx, dy) || 1; return [p[0] - dy / l * 0.007, p[1] + dx / l * 0.007]; });
+    B.geo(carryStrip([off.map(p => [p[0], p[1], zs - 0.019]), off.map(p => [p[0], p[1], zs + 0.019])], (r, j) => [(193 + r * 30) / 256, j / off.length * 0.7], true), m, white, null);
+    B.geo(new THREE.BoxGeometry(0.07, 0.03, 0.055).translate(s.w * 0.45, deckY(s, 0.45) + 0.02, zs), m, white, [207 / 256, 450 / 512]);
+  }
+  return B;
+}
+// a boat trailer behind a bus (a child of the bus's hitch pivot, so it drives with it): galvanised, on one axle under
+// black mudguards, the A-frame drawbar with its coupling on the bus's ball (the pivot, at -2.5) and the jockey wheel wound
+// up; a rack of two levels (padded bars on four uprights) with stacker posts in the middle; the lamp bar with the plate at
+// the back. Your kayak and your canoe ride on edge on the lower bars against the posts, decks out (t.userData.boats: each
+// shown while it is loaded). The parts are made once (busGeo); the boats wear your design (carryMat, carryRetint)
+let trailerPlate = null;
 function makeTrailer(load) {
-  const t = new THREE.Group(), dark = new THREE.MeshLambertMaterial({ color: 0x2b2f33 }), black = new THREE.MeshLambertMaterial({ color: 0x15181a });
-  const add = (geo, mat, x, y, z) => { const m = new THREE.Mesh(geo, mat); m.position.set(x, y, z); t.add(m); return m; };
-  add(new THREE.BoxGeometry(1.7, 0.1, 3.8), dark, 0, 0.55, 0);
-  add(new THREE.BoxGeometry(0.1, 0.1, 1.3), dark, 0, 0.55, -2.5);
-  for (const x of [-0.85, 0.85]) { const w = add(new THREE.CylinderGeometry(0.3, 0.3, 0.2, 14), black, x, 0.3, 0.3); w.rotation.z = Math.PI / 2; }
-  for (const z of [-1.3, 1.3]) { for (const x of [-0.8, 0.8]) add(new THREE.BoxGeometry(0.06, 0.6, 0.06), dark, x, 0.88, z); add(new THREE.BoxGeometry(1.7, 0.06, 0.08), dark, 0, 1.16, z); }
-  const boats = {};
-  for (const [k, x, c] of [['k1', -0.42, myColor], ['c1', 0.42, '#f2c230']]) {
-    const g = new THREE.Group(), m = new THREE.MeshLambertMaterial({ color: c });
-    const deck = new THREE.Mesh(remoteDeckGeo, m); deck.scale.set(0.9, 0.9, 1); g.add(deck);
-    const hull = new THREE.Mesh(remoteHullGeo, m); hull.scale.set(0.9, 0.9, 1); g.add(hull);
-    if (k === 'c1') g.scale.set(1.08, 1.05, 0.97);
-    g.position.set(x, 1.24, 0); g.visible = !!(load && load[k]); t.add(g); boats[k] = g;
+  const t = new THREE.Group(), lo = effQuality() === 'low', M = busM(), night = mode === 'night', q = lo ? 'lo' : 'hi';
+  t.add(new THREE.Mesh(busGeo('trl' + q, () => trailerGeo(lo)), M.metal));
+  // its lamps (red, amber, white), red reflector triangles, the plate (the lamps take the plate canvas's white corner)
+  if (!trailerPlate) { trailerPlate = canvasTex(256, 64, g => { g.fillStyle = '#fff'; g.fillRect(0, 0, 256, 64); busPlate(g, 2, 7, 214, 50, 'WW 4077', true); }); trailerPlate.flipY = false; trailerPlate.__keep = true; }
+  if (!M.tlamp) { M.tlamp = shared(new THREE.MeshBasicMaterial({ vertexColors: true, map: trailerPlate })); M.tlamp.nightSelf = true; }
+  t.add(new THREE.Mesh(busGeo('trlL' + q + night, () => trailerLampGeo(night)), M.tlamp));
+  const w = new THREE.Mesh(busGeo('trlW' + q, () => busWheels(vbuild(), 0.28, 0.17, 0.78, lo).geom()), M.metal); w.position.set(0, 0.28, 0.3); t.add(w); t.userData.wheels = [w];
+  // your boats (your design and colour): the kayak on the left, the canoe on the right, strapped at both bars, the hulls
+  // against the posts' foam
+  const boats = {}, mat = carryMat(mySkin, myColor);
+  for (const [k, s] of [['k1', -1], ['c1', 1]]) {
+    const b = new THREE.Mesh(busGeo('trl' + k + q, () => carryBoat(vbuild(), k === 'c1', lo, new THREE.Matrix4().makeRotationZ(-s * Math.PI / 2).setPosition(s * 0.122, 1.3, -0.1), [1, 1, 1], [-0.9, 1.1]).geom()), mat);
+    b.visible = !!(load && load[k]); t.add(b); boats[k] = b;
   }
   t.userData.boats = boats;
   return t;
 }
-// inside a bus: floor, seats, the wheel, inner walls below the windows and a roof lining (seen only from inside)
-const BUS_SEATS = [[-0.45, -1.45], [0.45, -1.45], [-0.45, -0.55], [0.45, -0.55], [-0.45, 0.35], [0.45, 0.35], [-0.45, 1.25], [0.45, 1.25]];
+function trailerGeo(lo) {
+  const B = vbuild(), galv = [0.6, 0.62, 0.63], galvD = [0.48, 0.5, 0.51], black = [0.045, 0.05, 0.055], pad = [0.09, 0.14, 0.27];
+  const tube = (a, b, r, c) => {
+    const d = new THREE.Vector3(b[0] - a[0], b[1] - a[1], b[2] - a[2]), l = d.length();
+    const m = new THREE.Matrix4().makeRotationFromQuaternion(new THREE.Quaternion().setFromUnitVectors(new THREE.Vector3(0, 1, 0), d.normalize())).setPosition((a[0] + b[0]) / 2, (a[1] + b[1]) / 2, (a[2] + b[2]) / 2);
+    B.geo(new THREE.CylinderGeometry(r, r, l, lo ? 6 : 8, 1, true), m, c, BUS_WHITE);
+  };
+  // the frame: two rails, cross members, the axle beam
+  for (const s of [-1, 1]) B.box(s * 0.6 - 0.03, 0.45, -1.95, s * 0.6 + 0.03, 0.54, 1.97, galv);
+  for (const z of [-1.95, -1.0, 1.0, 1.95]) B.box(-0.6, 0.46, z - 0.03, 0.6, 0.53, z + 0.03, galvD);
+  B.box(-0.8, 0.26, 0.27, 0.8, 0.31, 0.33, black); for (const s of [-1, 1]) B.box(s * 0.56, 0.31, 0.2, s * 0.64, 0.46, 0.4, galvD);
+  // the drawbar: two tubes into the coupling head over the ball, its lever; the safety cable
+  for (const s of [-1, 1]) tube([s * 0.6, 0.5, -1.95], [s * 0.05, 0.49, -2.33], 0.032, galv);
+  B.box(-0.055, 0.45, -2.42, 0.055, 0.53, -2.28, galv);
+  B.box(-0.05, 0.44, -2.535, 0.05, 0.535, -2.4, black); B.boxc(0, 0.56, -2.4, 0.04, 0.025, 0.22, black, [0.15, 0, 0]);
+  tube([0.03, 0.47, -2.3], [0.0, 0.4, -2.56], 0.006, [0.35, 0.36, 0.37]);
+  // the jockey wheel: its tube in a clamp beside the drawbar, wound up, the crank on top, the little wheel
+  tube([0.15, 0.24, -2.12], [0.15, 0.86, -2.12], 0.028, galvD); B.box(0.08, 0.46, -2.17, 0.15, 0.54, -2.07, black);
+  B.box(0.12, 0.86, -2.15, 0.27, 0.88, -2.09, black);
+  B.geo(new THREE.CylinderGeometry(0.075, 0.075, 0.05, lo ? 8 : 12).rotateZ(Math.PI / 2).translate(0.15, 0.17, -2.12), null, black, BUS_WHITE);
+  // black mudguards over the wheels on brackets, outside and in
+  for (const s of [-1, 1]) {
+    const R = [], n = lo ? 6 : 10;
+    for (let i = 0; i <= n; i++) { const an = 0.25 + (Math.PI - 0.5) * i / n; R.push([[s * 0.66, 0.28 + 0.36 * Math.sin(an), 0.3 + 0.36 * Math.cos(an)], [s * 0.9, 0.28 + 0.36 * Math.sin(an), 0.3 + 0.36 * Math.cos(an)]]); }
+    B.loft(R, i => { const an = 0.25 + (Math.PI - 0.5) * i / n; return [0, Math.sin(an), Math.cos(an)]; }, () => [black, null]);
+    B.loft(R, i => { const an = 0.25 + (Math.PI - 0.5) * i / n; return [0, -Math.sin(an), -Math.cos(an)]; }, () => [black, null]);
+    // its outer skirt, so that from the side it reads as a fender
+    B.loft(R.map((r, i) => { const an = 0.25 + (Math.PI - 0.5) * i / n; return [0.36, 0.3].map(q => [s * 0.9, 0.28 + q * Math.sin(an), 0.3 + q * Math.cos(an)]); }), () => [s, 0, 0], () => [black, null]);
+    B.box(s * 0.6, 0.5, 0.24, s * 0.68, 0.56, 0.36, galvD);
+  }
+  // the rack: uprights at the bars, padded bars at two levels, the stacker posts in the middle with foam on them
+  for (const z of [-1.0, 1.0]) {
+    for (const s of [-1, 1]) B.box(s * 0.6 - 0.025, 0.54, z - 0.025, s * 0.6 + 0.025, 1.87, z + 0.025, galv);
+    for (const y of [1.0, 1.82]) { B.box(-0.63, y - 0.025, z - 0.025, 0.63, y + 0.025, z + 0.025, galv); for (const s of [-1, 1]) B.box(s * 0.05, y + 0.02, z - 0.045, s * 0.57, y + 0.065, z + 0.045, pad); }
+    B.box(-0.02, 1.0, z - 0.02, 0.02, 1.72, z + 0.02, galv); B.box(-0.036, 1.07, z - 0.036, 0.036, 1.68, z + 0.036, pad);
+    for (const s of [-1, 1]) B.box(s * 0.6 - 0.04, 0.53, z - 0.04, s * 0.6 + 0.04, 0.6, z + 0.04, galvD);
+  }
+  // the lamp bar at the back
+  B.box(-0.9, 0.44, 1.97, 0.9, 0.5, 2.02, galv); for (const s of [-1, 1]) B.box(s * 0.56, 0.47, 1.9, s * 0.62, 0.5, 1.98, galvD);
+  return B.geom();
+}
+// at night the tail lamps are lit, the indicators, reversing lamps and reflectors dark, the plate in its lamp's light
+function trailerLampGeo(night) {
+  const L = vbuild(), W2 = [0.94, 0.5], red = night ? [1, 0.1, 0.07] : [0.62, 0.07, 0.06];
+  for (const s of [-1, 1]) {
+    L.box(s * 0.66, 0.45, 2.02, s * 0.74, 0.54, 2.05, red, null, W2); L.box(s * 0.74, 0.45, 2.02, s * 0.8, 0.54, 2.05, night ? [0.2, 0.1, 0.02] : [0.95, 0.52, 0.1], null, W2); L.box(s * 0.8, 0.45, 2.02, s * 0.86, 0.54, 2.05, night ? [0.13, 0.13, 0.13] : [0.86, 0.86, 0.86], null, W2);
+    L.geo(new THREE.CircleGeometry(0.055, 3).rotateZ(Math.PI / 2).translate(s * 0.5, 0.49, 2.025), null, night ? [0.22, 0.03, 0.02] : [0.7, 0.06, 0.05], W2);
+  }
+  L.geo(new THREE.PlaneGeometry(0.44, 0.1).translate(0, 0.43, 2.026), null, night ? [0.5, 0.5, 0.47] : [1, 1, 1], null);
+  const g = L.geom(), luv = g.attributes.uv, lp = g.attributes.position;
+  for (let i = 0; i < lp.count; i++) if (Math.abs(lp.getZ(i) - 2.026) < 1e-4 && Math.abs(lp.getX(i)) < 0.23) luv.setXY(i, (5 + (lp.getX(i) + 0.22) / 0.44 * 208) / 256, (10 + (0.48 - lp.getY(i)) / 0.1 * 44) / 64);
+  return g;
+}
+// inside a bus: the cab (dashboard with its instruments and the navigation screen, the wheel on its column, the gear
+// lever), two front seats and three benches with low headrests (from a seat you look over the one in front) and belts,
+// trims under the windows and on the pillars, the roof lining with its lights, the wheel arches' covers, a step at each
+// sliding door. One mesh (made once: busInnerGeo; the seats' fabric from the livery: BUS_SEAT), the wheel and the screens
+// apart. BUS_SEATS: [x, z] of each seat (0 the driver's)
+const BUS_SEATS = [[-0.45, -1.1], [0.45, -1.1], [-0.45, -0.25], [0.45, -0.25], [-0.45, 0.6], [0.45, 0.6], [-0.45, 1.45], [0.45, 1.45]];
+function busInnerGeo(lo) {
+  const B = vbuild();
+  // (the lining and the lamps over 1: they face down, away from the light, and still look pale and lit)
+  const flo = [0.12, 0.125, 0.13], trim = [0.23, 0.24, 0.26], trimL = [0.5, 0.5, 0.48], lining = [1.7, 1.66, 1.56], dash = [0.2, 0.205, 0.21], dashT = [0.13, 0.135, 0.14];
+  const seatD = [0.11, 0.13, 0.17], WH = [1, 1, 1], shell = [0.17, 0.18, 0.2];
+  const belt = [0.05, 0.05, 0.055], led = [4, 3.9, 3.5], chrome = [0.55, 0.57, 0.6], black = [0.03, 0.03, 0.035];
+  // the floor (narrower over the arches; at the sliding doors it runs out to the step)
+  B.box(-0.7, 0.54, -2.04, 0.7, 0.58, 2.4, flo);
+  for (const s of [-1, 1]) for (const [z0, z1] of [[-2.04, -1.99], [-1.11, BUS_DOOR[0]], [BUS_DOOR[1], 1.16], [2.04, 2.4]]) B.box(s * 0.7, 0.54, z0, s * 0.94, 0.58, z1, flo);
+  for (const s of [-1, 1]) B.box(s * 0.7, 0.54, BUS_DOOR[0], s * 0.82, 0.58, BUS_DOOR[1], flo);
+  for (const s of [-1, 1]) {
+    const X = s * 0.94, xi = s * 0.92;
+    // the cab door's trim (armrest, pull), the B-pillar, the wall behind the sliding door, the pillars between the
+    // windows, the band over them; the arches' covers, the step
+    B.box(xi, 0.58, -2.02, X, 1.2, -1.12, trim); B.box(s * 0.85, 0.97, -1.9, xi, 1.02, -1.35, trimL); B.box(s * 0.88, 1.05, -1.5, xi, 1.08, -1.38, chrome);
+    B.box(xi, 0.58, -1.12, X, 2.1, -1.07, trimL);
+    B.box(xi, 0.58, BUS_DOOR[1], X, 1.2, 2.38, trim);
+    for (const [z0, z1] of BUS_PIL) B.box(xi, 1.2, z0, X, 2.02, Math.min(z1, 2.38), trimL);
+    B.box(xi, 2.0, -1.55, X, 2.2, -1.07, trimL); B.box(xi, 2.0, BUS_DOOR[1], X, 2.2, 2.38, trimL);
+    B.boxc(s * 0.885, 2.13, (BUS_DOOR[0] + 2.38) / 2, 0.03, 0.2, 2.38 - BUS_DOOR[0], lining, [0, 0, s * 0.5]);
+    for (const [z0, z1] of [[-1.99, -1.11], [1.16, 2.04]]) { B.box(s * 0.7, 0.8, z0, X, 0.86, z1, trim); B.box(s * 0.7, 0.58, z0, s * 0.72, 0.86, z1, trim); }
+    B.box(s * 0.82, 0.42, BUS_DOOR[0], X, 0.46, BUS_DOOR[1], flo); B.box(s * 0.82, 0.46, BUS_DOOR[0], s * 0.84, 0.58, BUS_DOOR[1], chrome);
+    // the A-pillar's trim along the windscreen, a grab handle over each sliding door
+    B.boxc(s * 0.8, 1.7, -1.8, 0.05, 0.88, 0.045, [0.26, 0.27, 0.28], [Math.atan2(0.46, 0.76), 0, 0]);
+    B.box(s * 0.9, 2.0, -0.75, xi, 2.03, -0.3, dash);
+  }
+  // the roof lining, the header over the windscreen, the visors, the mirror, the lights
+  B.box(-0.9, 2.18, -1.47, 0.9, 2.22, 2.38, lining); B.boxc(0, 2.12, -1.515, 1.84, 0.03, 0.18, lining, [-0.745, 0, 0]);
+  for (const s of [-1, 1]) { B.boxc(s * 0.45, 2.1, -1.5, 0.62, 0.02, 0.17, trimL, [0.35, 0, 0]); if (!lo) B.box(s * 0.52, 2.172, -0.9, s * 0.48, 2.18, 2.2, led); }
+  B.boxc(0, 1.99, -1.58, 0.25, 0.07, 0.03, dash); B.box(-0.01, 2.02, -1.575, 0.01, 2.08, -1.555, dash);
+  B.box(-0.13, 2.168, -1.4, 0.13, 2.18, -1.25, led); B.box(-0.1, 2.168, 0.9, 0.1, 2.18, 1.05, led);
+  // the back: the barn doors' trim round their windows
+  B.box(-0.92, 0.58, 2.36, 0.92, 1.2, 2.4, trim); B.box(-0.92, 2.0, 2.36, 0.92, 2.22, 2.4, trimL);
+  for (const [x0, x1] of [[-0.92, -0.84], [-0.03, 0.03], [0.84, 0.92]]) B.box(x0, 1.2, 2.36, x1, 2.0, 2.4, trimL);
+  // the dashboard: its top sloping up from the windscreen, the face, the footwell, the centre stack with the gear lever,
+  // the instruments' hood, vents, the glovebox; the steering column
+  B.boxc(0, 1.405, -1.9, 1.86, 0.06, 0.27, dashT, [-0.3, 0, 0]);
+  B.box(-0.92, 1.0, -1.8, 0.92, 1.45, -1.76, dash); B.box(-0.92, 0.58, -2.04, 0.92, 1.0, -1.95, dash);
+  B.box(-0.92, 1.37, -1.763, 0.92, 1.385, -1.755, [0.5, 0.52, 0.55]);
+  B.box(-0.17, 0.72, -1.86, 0.17, 1.44, -1.72, dashT); B.box(-0.13, 0.58, -1.72, 0.13, 0.8, -1.3, dashT);
+  B.boxc(0, 1.0, -1.7, 0.025, 0.12, 0.025, chrome, [0.35, 0, 0]); B.boxc(0, 1.07, -1.68, 0.05, 0.05, 0.06, black);
+  B.box(-0.66, 1.43, -1.89, -0.24, 1.6, -1.87, dashT); B.box(-0.66, 1.57, -1.88, -0.24, 1.6, -1.76, dashT);
+  for (const s of [-1, 1]) B.box(-0.45 + s * 0.21 - 0.01, 1.43, -1.88, -0.45 + s * 0.21 + 0.01, 1.6, -1.76, dashT);
+  B.box(-0.15, 1.44, -1.845, 0.23, 1.62, -1.825, black);
+  for (const x of [-0.8, -0.12, 0.12, 0.8]) { B.box(x - 0.075, 1.28, -1.761, x + 0.075, 1.35, -1.756, chrome); B.box(x - 0.065, 1.29, -1.765, x + 0.065, 1.34, -1.758, black); }
+  B.box(0.28, 1.12, -1.758, 0.78, 1.125, -1.755, black); B.box(0.5, 1.18, -1.758, 0.58, 1.2, -1.75, chrome);
+  B.boxc(-0.45, 1.33, -1.73, 0.08, 0.08, 0.14, dashT, [-0.38, 0, 0]);
+  // the seats: the driver's and the passenger's on pedestals, then three benches; cushions, backrests leaning back with
+  // their inserts, a low headrest on each (its top under the eyes of whoever sits behind), a belt across each
+  BUS_SEATS.forEach(([x, z], i) => {
+    const front = i < 2, bench = !front && x < 0, w = front ? 0.52 : 1.46, cx = front ? x : 0;
+    if (!front && !bench) return;
+    if (front) B.box(cx - 0.2, 0.58, z - 0.18, cx + 0.2, 0.9, z + 0.18, dashT); else B.box(cx - 0.68, 0.58, z - 0.15, cx + 0.68, 0.9, z + 0.18, dashT);
+    B.box(cx - w / 2, 0.9, z - 0.25, cx + w / 2, 1.03, z + 0.24, seatD);
+    B.boxc(cx, 1.31, z + 0.295, w, 0.56, 0.1, seatD, [0.14, 0, 0]);
+    B.boxc(cx, 1.29, z + 0.352, w - 0.04, 0.48, 0.014, shell, [0.14, 0, 0]);
+  });
+  for (const [x, z] of BUS_SEATS) {
+    if (!lo) { B.box(x - 0.18, 1.03, z - 0.2, x + 0.18, 1.04, z + 0.18, WH, null, BUS_SEAT); B.boxc(x, 1.32, z + 0.243, 0.34, 0.4, 0.01, WH, [0.14, 0, 0], BUS_SEAT); }
+    B.boxc(x, 1.625, z + 0.345, 0.25, 0.09, 0.08, seatD, [0.14, 0, 0]); B.boxc(x, 1.625, z + 0.303, 0.19, 0.055, 0.004, WH, [0.14, 0, 0], BUS_SEAT);
+    if (z < 1.4) B.boxc(x, 1.52, z + 0.385, 0.28, 0.016, 0.016, [0.16, 0.16, 0.17]);
+    if (!lo) { const sx = x < 0 ? -1 : 1; B.boxc(x + sx * 0.04, 1.33, z + 0.237, 0.045, 0.54, 0.012, belt, [0.14, 0, -sx * 0.62]); B.box(x - sx * 0.2 - 0.02, 1.0, z + 0.18, x - sx * 0.2 + 0.02, 1.08, z + 0.22, [0.62, 0.62, 0.64]); }
+  }
+  return B.geom();
+}
+// the wheel: rim, three spokes and the boss
+function busSteerGeo(lo) {
+  const W = vbuild();
+  W.geo(new THREE.TorusGeometry(0.19, 0.022, lo ? 5 : 6, lo ? 14 : 22), null, [0.06, 0.06, 0.065], BUS_WHITE);
+  for (const a of [0, Math.PI, -Math.PI / 2]) W.geo(new THREE.BoxGeometry(0.16, 0.035, 0.02).translate(0.09, 0, -0.01).rotateZ(a), null, [0.12, 0.12, 0.13], BUS_WHITE);
+  W.geo(new THREE.CylinderGeometry(0.065, 0.075, 0.05, lo ? 8 : 14).rotateX(Math.PI / 2).translate(0, -0.01, -0.02), null, [0.09, 0.09, 0.1], BUS_WHITE);
+  return W.geom();
+}
+// the screens: the instruments (top half of their canvas) in the hood, the navigation (bottom half) in the dashboard
+function busScreenGeo() {
+  const P = [], U = [], I = [], plane = (c, w, h, rx, v0, v1) => {
+    const m = new THREE.Matrix4().makeRotationX(rx).setPosition(...c), b = P.length / 3;
+    for (const [x, y, u, v] of [[-w / 2, -h / 2, 0, v1], [w / 2, -h / 2, 1, v1], [w / 2, h / 2, 1, v0], [-w / 2, h / 2, 0, v0]]) { const p = new THREE.Vector3(x, y, 0).applyMatrix4(m); P.push(p.x, p.y, p.z); U.push(u, v); }
+    I.push(b, b + 1, b + 2, b, b + 2, b + 3);
+  };
+  plane([-0.45, 1.5, -1.865], 0.38, 0.1, -0.2, 0, 0.5); plane([0.04, 1.53, -1.82], 0.34, 0.16, -0.2, 0.5, 1);
+  const g = new THREE.BufferGeometry(); g.setAttribute('position', new THREE.Float32BufferAttribute(P, 3)); g.setAttribute('uv', new THREE.Float32BufferAttribute(U, 2)); g.setIndex(I); g.computeVertexNormals();
+  g.computeBoundingSphere(); return g;
+}
 function busInterior(grp) {
-  const seatM = new THREE.MeshLambertMaterial({ color: 0x2c3e57 }), trim = new THREE.MeshLambertMaterial({ color: 0x3a3d40, side: THREE.DoubleSide }), lining = new THREE.MeshLambertMaterial({ color: 0xd8d6cf, side: THREE.DoubleSide });
-  const add = (geo, mat, x, y, z) => { const m = new THREE.Mesh(geo, mat); m.position.set(x, y, z); grp.add(m); return m; };
-  add(new THREE.BoxGeometry(1.9, 0.04, 4.6), trim, 0, 0.56, 0);
-  for (const [x, z] of BUS_SEATS) { add(new THREE.BoxGeometry(0.5, 0.12, 0.48), seatM, x, 0.98, z); add(new THREE.BoxGeometry(0.5, 0.62, 0.08), seatM, x, 1.32, z + 0.26); }
-  add(new THREE.BoxGeometry(1.9, 0.32, 0.3), trim, 0, 1.25, -2.1);
-  const wheel = add(new THREE.TorusGeometry(0.19, 0.025, 6, 18), trim, -0.45, 1.42, -1.82); wheel.rotation.x = -1.1;
-  const hub = new THREE.Mesh(new THREE.BoxGeometry(0.34, 0.03, 0.03), trim); wheel.add(hub);
-  const col = add(new THREE.CylinderGeometry(0.025, 0.03, 0.4, 6), trim, -0.45, 1.28, -1.95); col.rotation.x = -1.1 + Math.PI / 2;
-  for (const k of [-1, 1]) { const h = new THREE.Mesh(new THREE.BoxGeometry(0.06, 0.09, 0.045), skinMat); h.position.set(k * 0.185, 0.02, 0.015); wheel.add(h); }   // your hands on the rim
-  const scv = document.createElement('canvas'); scv.width = 128; scv.height = 64;
-  const stex = new THREE.CanvasTexture(scv), sp = new THREE.Mesh(new THREE.PlaneGeometry(0.3, 0.15), new THREE.MeshBasicMaterial({ map: stex }));
-  sp.position.set(-0.45, 1.415, -2.06); sp.rotation.x = -0.6; grp.add(sp);
+  const lo = effQuality() === 'low', M = busM(), q = lo ? 'lo' : 'hi';
+  grp.add(new THREE.Mesh(busGeo('inner' + q, () => busInnerGeo(lo)), new THREE.MeshLambertMaterial({ vertexColors: true, map: grp.userData.livery })));
+  // the wheel on a pivot leaning it back toward you (updateDrive turns it by its own x: -1.1 and the steer); the
+  // driver's hands on the rim, shown only for the driver sitting there (see onBeforeRender)
+  const piv = new THREE.Group(); piv.position.set(-0.45, 1.4, -1.68); piv.rotation.x = 0.716; grp.add(piv);
+  const wheel = new THREE.Mesh(busGeo('steer' + q, () => busSteerGeo(lo)), M.inner); wheel.rotation.x = -1.1; piv.add(wheel);
+  const hands = new THREE.Mesh(busGeo('hands', () => { const hg = vbuild(); for (const k of [-1, 1]) hg.box(k * 0.185 - 0.03, -0.025, -0.005, k * 0.185 + 0.03, 0.065, 0.04, [1, 1, 1]); return hg.geom(); }), skinMat);
+  hands.visible = false; wheel.add(hands);
+  wheel.onBeforeRender = () => { const f = grp.userData.front; hands.visible = !!f && !!f[0] && !f[0].visible && (club.seat === 'drv' || !!(ride && ride.drv)); };
+  // the instruments (a dial each side of the speed, as km/h) and the navigation screen: one canvas, drawSpeedo; lit
+  // at night
+  const scv = document.createElement('canvas'); scv.width = 256; scv.height = 128;
+  const stex = new THREE.CanvasTexture(scv); stex.flipY = false;
+  const sm = new THREE.MeshBasicMaterial({ map: stex }); sm.nightSelf = true;
+  grp.add(new THREE.Mesh(busGeo('screen', busScreenGeo), sm));
   grp.userData.wheel = wheel; grp.userData.speedo = { cv: scv, tex: stex, last: -1 };
-  for (const x of [-0.97, 0.97]) add(new THREE.BoxGeometry(0.03, 0.8, 4.6), trim, x, 0.98, 0);
-  add(new THREE.BoxGeometry(1.94, 0.03, 4.6), lining, 0, 2.27, 0.1);
-  for (const z of [-1.0, 0.4, 1.8]) for (const x of [-0.97, 0.97]) add(new THREE.BoxGeometry(0.04, 0.9, 0.12), trim, x, 1.83, z);
+  drawSpeedo(grp.userData.speedo, 0);
+}
+// the cluster (drawn on its own canvas, then into the top half of the screens' canvas): the speed on a dial and in big
+// figures, a rev dial; under it the navigation screen: the road ahead as a line on a dark map, drawn once. After the
+// first upload only the cluster's half goes up to the GPU again (copyTextureToTexture)
+const _spAt = new THREE.Vector2();
+function drawSpeedo(so, kmh) {
+  if (!so.cl) { so.cl = document.createElement('canvas'); so.cl.width = 256; so.cl.height = 64; so.src = { image: so.cl }; }
+  const g = so.cl.getContext('2d');
+  g.fillStyle = '#05080a'; g.fillRect(0, 0, 256, 64);
+  const dial = (cx, f, col) => {
+    g.strokeStyle = '#2a3236'; g.lineWidth = 3; g.beginPath(); g.arc(cx, 34, 25, Math.PI * 0.75, Math.PI * 2.25); g.stroke();
+    g.strokeStyle = col; g.beginPath(); g.arc(cx, 34, 25, Math.PI * 0.75, Math.PI * (0.75 + 1.5 * f)); g.stroke();
+    const a = Math.PI * (0.75 + 1.5 * f); g.strokeStyle = '#ff5a3c'; g.lineWidth = 2; g.beginPath(); g.moveTo(cx, 34); g.lineTo(cx + Math.cos(a) * 22, 34 + Math.sin(a) * 22); g.stroke();
+  };
+  dial(34, clamp(kmh / 140, 0, 1), '#3fa4d8'); dial(222, clamp(0.12 + (kmh % 38) / 50, 0, 1), '#7ef0a0');
+  g.fillStyle = '#e8f4f0'; g.font = '700 34px "Barlow Condensed", monospace'; g.textAlign = 'center'; g.textBaseline = 'middle'; g.fillText(String(kmh), 118, 30);
+  g.font = '600 13px sans-serif'; g.fillStyle = '#9fb3b0'; g.fillText('km/h', 164, 38);
+  const m = so.cv.getContext('2d'); m.drawImage(so.cl, 0, 0);
+  if (so.nav) { renderer.copyTextureToTexture(_spAt, so.src, so.tex); return; }
+  so.nav = true;
+  m.fillStyle = '#0e1a22'; m.fillRect(0, 64, 256, 64);
+  m.strokeStyle = '#22343f'; m.lineWidth = 6; for (const [a, b, c, d] of [[0, 120, 256, 84], [60, 64, 90, 128], [180, 64, 150, 128]]) { m.beginPath(); m.moveTo(a, b); m.lineTo(c, d); m.stroke(); }
+  m.strokeStyle = '#3fa4d8'; m.lineWidth = 5; m.beginPath(); m.moveTo(128, 128); m.quadraticCurveTo(122, 100, 150, 86); m.lineTo(210, 70); m.stroke();
+  m.fillStyle = '#f2c230'; m.beginPath(); m.moveTo(128, 112); m.lineTo(121, 124); m.lineTo(135, 124); m.closePath(); m.fill();
+  m.fillStyle = 'rgba(5,8,10,0.75)'; m.fillRect(0, 64, 256, 14); m.fillStyle = '#e8f4f0'; m.font = '600 11px sans-serif'; m.textAlign = 'left'; m.textBaseline = 'middle'; m.fillText('↑ 2.4 km', 6, 71);
+  so.tex.needsUpdate = true;
 }
 function buildStartArea(r) {
   const side = startSide(), py = plazaY(), at = (s, d) => atBank(s, d, side);
@@ -8120,7 +8873,7 @@ function buildStartArea(r) {
   if (RV.lm !== 'club') {
     bus = makeBus(); busInterior(bus);
     const [bx, , bz] = at(SA.bus[0], SA.bus[1]); bus.position.set(bx, level(0) + py, bz); bus.rotation.y = yawAt(SA.bus[0]) + Math.PI; world.add(bus);
-    bus.userData.door.position.x = side * 1.02;
+    busDoorSide(bus, side);
     bus.userData.parked = [bx, bz]; bus.userData.spot = [bx, bz, bus.rotation.y];
     // the bay, marked in yellow
     const bay = new THREE.MeshBasicMaterial({ color: 0xf2c230 });
@@ -9839,7 +10592,7 @@ function startArrival() {
 // you step out of the bus's sliding door, facing the changing room
 function standAtBus() {
   if (tripVia === 'train' && zugSt && zugSt.train && !zugSt.club) { zugStandOut(zugSt, -1); return; }
-  const [bx, bz] = bus.userData.parked, th = bus.rotation.y, door = bus.userData.door, lx = Math.sign(door.position.x) * 1.9, lz = -1.2;
+  const [bx, bz] = bus.userData.parked, th = bus.rotation.y, door = bus.userData.door, lx = Math.sign(door.position.x) * 1.9, lz = (BUS_DOOR[0] + BUS_DOOR[1]) / 2;
   P.on = true; P.moving = 0; P.bob = 0;
   P.x = bx + lx * Math.cos(th) + lz * Math.sin(th); P.z = bz - lx * Math.sin(th) + lz * Math.cos(th);
   P.y = groundAt(P.x, P.z) ?? level(0) + plazaY();
@@ -9853,15 +10606,16 @@ function updateArrival(dt) {
     arrival.t += dt;
     const u = clamp(arrival.t / arrival.dur, 0, 1), back = Math.pow(1 - u, 2) * arrival.road, f = flowDir(SA.bus[0]);
     bus.position.x = px + f[0] * back; bus.position.z = pz + f[1] * back;
+    busRoll(bus, bus.userData.piv, (Math.pow(1 - clamp((arrival.t - dt) / arrival.dur, 0, 1), 2) - Math.pow(1 - u, 2)) * arrival.road);
     if (arrival.t >= arrival.dur + arrival.out) {
       arrival.on = false;
       toast(tr('Willkommen!'), 'info'); labelAfterToast(tr(dressed() ? 'Hol dein Boot vom Bootsständer' : 'Zieh dich zuerst in der Umkleide um'), 2600, () => P.on && !dressing && B.land === 'rack' && !inChanging(P.x, P.z));
     }
   }
-  // once the bus stands, the sliding door pops out and runs back along the side
-  if (!arrival.on || arrival.t > arrival.dur) {
+  // once the bus stands (not while it is driven or ridden), the sliding door pops out and runs back along the side
+  if ((!arrival.on || arrival.t > arrival.dur) && !ride && !drv.on) {
     door.position.x = ds * Math.min(1.1, Math.abs(door.position.x) + dt * 0.4);
-    if (Math.abs(door.position.x) >= 1.1) door.position.z = Math.min(0, door.position.z + dt * 1.6);
+    if (Math.abs(door.position.x) >= 1.1) door.position.z = Math.min(-0.1, door.position.z + dt * 1.6);
   }
   updateDressing(dt); animateNpcs();
 }
@@ -12078,7 +12832,7 @@ function showResult() {
       let prev = ''; try { prev = localStorage.getItem(`wwslalom.medal.${riverId}`) || ''; } catch (e) { /* storage blocked */ }
       if ((MEDAL_RANK[m.got[1]] || 0) > (MEDAL_RANK[prev] || 0)) { try { localStorage.setItem(`wwslalom.medal.${riverId}`, m.got[1]); } catch (e) { /* storage blocked */ } }
     }
-    if ((lrecord || firstHere) && ghostRec.length > 10) { try { localStorage.setItem(`wwslalom.ghost3.${riverId}${BK()}.${courseVar}`, JSON.stringify({ total, samples: ghostRec })); } catch (e) { /* storage full */ } }
+    if ((lrecord || firstHere) && ghostRec.length > 10) { try { localStorage.setItem(`wwslalom.ghost3.${riverId}${BK()}.${courseVar}`, JSON.stringify({ total, samples: ghostRec, rel: 1 })); } catch (e) { /* storage full */ } }
     lastShare.big = fmt(total); lastShare.medal = m.got ? tr('{0}-Medaille', tr(m.got[1])) : ''; lastShare.line = lastShare.medal || `${pen} ${tr('Strafsekunden')}`;
     lastShare.medalColor = m.got ? MEDAL_COLORS[m.got[0]] : null; lastShare.cells = gates.map(g => g.missed ? 50 : g.touched ? 2 : 0);
     if (riverId === 'woche') submitBoard(total).then(t => { if (t) $('bestResult').textContent = t; });
@@ -12756,7 +13510,7 @@ let myColor = BOAT_COLORS.includes(PREF.color) ? PREF.color : BOAT_COLORS[Math.f
 if (PREF.mode === 'race' || PREF.mode === 'free' || PREF.mode === 'cross' || PREF.mode === 'night') mode = PREF.mode;
 if (!location.hash && RIVERS[PREF.river]) riverId = PREF.river;
 function savePrefs() { try { localStorage.setItem('wwslalom.prefs', JSON.stringify({ nick: myNick, color: myColor, mode: mode === 'learn' ? 'race' : mode === 'club' ? clubPlan.mode : mode, river: mode === 'learn' ? 'kanal' : riverId === 'club' ? clubPlan.river : riverId === 'nacht' ? dayRiver : riverId, boat, lang, quality, course: courseMode, via: clubPlan.via, flow: flowMode, ctl: ctlMode, ctlv: 2, proSeen: !!PREF.proSeen, size: uiSize, kit: !!PREF.kit, upSeen: PREF.upSeen || 0, lookSeen: !!PREF.lookSeen, map: mapOn, music: musicOn, skin: mySkin, c1side: c1Home, npos: nightPos, nteam: nightTeam, nscare: nightScare, wx: wxPref, grade: gradePref ? 'on' : 'off', profile })); } catch (e) { /* storage blocked */ } if (typeof profileDirty === 'function') profileDirty(); }
-function applyBoatColor() { syncBoatLook(); sleeveMat.color.set(myColor); paddleKit().tipMat.color.set(myColor); if ($('careerSkins').children.length) renderCareer(); }
+function applyBoatColor() { syncBoatLook(); carryRetint(); sleeveMat.color.set(myColor); paddleKit().tipMat.color.set(myColor); if ($('careerSkins').children.length) renderCareer(); }
 function refreshIntro() {
   // at the club the card is the planning table: it shows (and sets) your plan, not the club itself
   if (mode === 'club') { const m0 = mode, r0 = riverId; mode = clubPlan.mode; riverId = mode === 'learn' ? 'kanal' : mode === 'night' ? 'nacht' : clubPlan.river; try { refreshIntro0(); } finally { mode = m0; riverId = r0; } }
@@ -13403,11 +14157,13 @@ function updateGhost() {
   const S = ghost.samples, f = clamp((state === 'ready' ? 0 : raceTime) * 10, 0, S.length - 1), i = Math.floor(f), u = f - i;
   const a = S[i], b = S[Math.min(S.length - 1, i + 1)], c = [];
   for (let k = 0; k < 9; k++) c[k] = k === 3 ? a[3] + Math.atan2(Math.sin(b[3] - a[3]), Math.cos(b[3] - a[3])) * u : a[k] + (b[k] - a[k]) * u;
+  // its height is kept over the water (rel); one recorded before the rivers fell more rides the water as it is now
+  c[1] = ghost.rel ? c[1] + level(-c[2]) : level(-c[2]) + 0.02;
   applyPose(ghostAv, c);
 }
 function recordGhost() {
   if (mode !== 'race' || state !== 'racing') return;
-  while (ghostRec.length <= raceTime * 10) ghostRec.push(myPose());
+  while (ghostRec.length <= raceTime * 10) { const p = myPose(); p[1] = r2(p[1] - level(-p[2])); ghostRec.push(p); }   // the height over the water
 }
 
 // ---------- talking ----------
@@ -14850,6 +15606,9 @@ function drawCourseMap(cv, opt) {
   }
   g.strokeStyle = '#5cc8ff'; g.lineWidth = Math.max(3, k * 2.6);
   for (const f of falls) if (inView(f.s)) { const h0 = hw(f.s), a = proj(f.s, cx(f.s) - h0), b = proj(f.s, cx(f.s) + h0); g.beginPath(); g.moveTo(a[0], a[1]); g.lineTo(b[0], b[1]); g.stroke(); }
+  // the steps (ledges the river pours over): a thinner line at the foot of each
+  g.lineWidth = Math.max(1.5, k * 1.1);
+  for (const t of steps) { const sf = t.s + t.L * 0.8; if (!inView(sf)) continue; const h0 = hw(sf), a = proj(sf, cx(sf) - h0), b = proj(sf, cx(sf) + h0); g.beginPath(); g.moveTo(a[0], a[1]); g.lineTo(b[0], b[1]); g.stroke(); }
   // small currents, only on the close-up map
   if (opt.detail) {
     g.strokeStyle = 'rgba(150,200,235,.5)'; g.lineWidth = 1;
@@ -18410,7 +19169,7 @@ function ivcBow() {
 // springing 6 m above the water so nothing reaches into the channel.
 function ivcBridge() {
   const s = FINISH_S + 92, h = hw(s), grp = new THREE.Group(); grp.position.set(cx(s), level(s), -s); orientGroup(grp, s); world.add(grp);
-  const xR = h + 2.4, xL = -(h + IV_FAR + 1.5), yR = bankSurfaceH(s, 3, 1) - level(s) + 0.4, yL = 5.4, deck = x => yL + (yR - yL) * (x - xL) / (xR - xL);
+  const xR = h + 2.4, xL = -(h + IV_FAR + 1.5), yR = bankSurfaceH(s, 3, 1) - level(s) + 0.4, yL = 6.9 + ivFall(s), deck = x => yL + (yR - yL) * (x - xL) / (xR - xL);
   const pw = 3.2, ops = [[-(h + 0.9), h + 0.9, 6.0]], n = 4, x0 = -(h + 0.9 + pw), x1 = xL + 2.5, w = (x0 - x1 - (n - 1) * pw) / n;
   for (let k = 0; k < n; k++) { const b = x0 - k * (w + pw); ops.push([b - w, b, null]); }
   ops.sort((a, b) => a[0] - b[0]);
@@ -19586,7 +20345,7 @@ CHAR.pau = {
       });
       tex.wrapS = THREE.RepeatWrapping;
       const pos = [], uv = [];
-      const stands = RV.stands ? RV.stands() : [[F - 36, 1, 30], [mode === 'free' ? F - 30 : 40, -1, 24], [-26, 1, 18]];
+      const stands = venueStands();
       for (const [s0, side, len] of stands) {
         const base = bankSurfaceH(s0 + len / 2, 6, side);
         for (let u = 0; u < len - 0.1; u += 4) {
@@ -19960,7 +20719,7 @@ CHAR.vaires = {
     }
     for (let k = 0; k < vai.boats.length; k++) {
       const b = vai.boats[k], s = vaiLakeS(b, T);
-      b.m.position.set(cx(s) + hw(s) + b.d, level(s) - 0.95 + Math.sin(T * 2.4 + b.d) * 0.03, -s); b.m.rotation.y = yawAt(s);
+      b.m.position.set(cx(s) + hw(s) + b.d, level(FINISH_S) - 0.95 + Math.sin(T * 2.4 + b.d) * 0.03, -s); b.m.rotation.y = yawAt(s);
     }
     // the giant screen: redrawn ten times a second at most
     const sc = vai.scr;
